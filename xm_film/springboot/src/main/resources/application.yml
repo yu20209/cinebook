@@ -43,6 +43,9 @@ spring:
     connection-timeout: 3s
     publisher-confirm-type: correlated
     publisher-returns: true
+    template:
+      # mandatory：无法路由的消息退回给发布端，而不是被 broker 直接丢弃
+      mandatory: true
     listener:
       simple:
         acknowledge-mode: manual

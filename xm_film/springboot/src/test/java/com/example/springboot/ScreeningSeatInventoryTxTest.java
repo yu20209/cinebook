@@ -2,6 +2,7 @@ package com.example.springboot;
 
 import com.example.springboot.mapper.ScreeningSeatMapper;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,9 +42,31 @@ class ScreeningSeatInventoryTxTest {
     @Autowired
     PlatformTransactionManager transactionManager;
 
+    /**
+     * screening_seat 对 record 有 ON DELETE CASCADE 外键，
+     * 因此必须先把父级（影院 / 影厅 / 影片 / 场次）准备好，
+     * 否则负数 ID 的座位行会被外键拒绝（INSERT IGNORE 静默跳过）。
+     */
+    @BeforeEach
+    void seedRecord() {
+        cleanup();
+        jdbcTemplate.update("INSERT INTO cinema (id, username, password, name, status) "
+                + "VALUES (?, ?, 'x', 'seat-tx-cinema', '已审核')", RECORD_ID, "seat-tx-cinema");
+        jdbcTemplate.update("INSERT INTO room (id, cinema_id, title, name) VALUES (?, ?, 'seat-tx-room', 'seat-tx-room')",
+                RECORD_ID, RECORD_ID);
+        jdbcTemplate.update("INSERT INTO film (id, title, status) VALUES (?, 'seat-tx-film', '已上映')", RECORD_ID);
+        jdbcTemplate.update("INSERT INTO record (id, cinema_id, room_id, film_id, title, start, price, status) "
+                + "VALUES (?, ?, ?, ?, 'seat-tx-film', '2026-12-31 10:00:00', 10.00, '正常')",
+                RECORD_ID, RECORD_ID, RECORD_ID, RECORD_ID);
+    }
+
     @AfterEach
     void cleanup() {
-        jdbcTemplate.update("DELETE FROM screening_seat WHERE record_id = ?", RECORD_ID);
+        // 先删场次（级联清座位），再按外键依赖顺序清理父级
+        jdbcTemplate.update("DELETE FROM record WHERE id = ?", RECORD_ID);
+        jdbcTemplate.update("DELETE FROM room WHERE id = ?", RECORD_ID);
+        jdbcTemplate.update("DELETE FROM film WHERE id = ?", RECORD_ID);
+        jdbcTemplate.update("DELETE FROM cinema WHERE id = ?", RECORD_ID);
     }
 
     /** 事务回滚必须连带释放刚锁定的座位，否则座位会一直锁到超时补偿 */

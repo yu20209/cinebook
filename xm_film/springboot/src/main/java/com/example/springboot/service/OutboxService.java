@@ -32,6 +32,11 @@ public class OutboxService {
     private static final int BATCH_LIMIT = 100;
     /** 最大重试次数：超过后转 FAILED，等待人工处理 */
     private static final int MAX_RETRY = 8;
+    /** 认领租约：实例在租约内未完成投递（崩溃/长时间阻塞），事件会被其它实例接手 */
+    private static final int CLAIM_LEASE_SECONDS = 60;
+
+    /** 当前实例标识：同一进程内固定，用于认领与完结校验 */
+    private final String instanceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
     private final OutboxEventMapper outboxEventMapper;
     private final OrderEventPublisher publisher;
@@ -67,26 +72,33 @@ public class OutboxService {
 
     /**
      * 派发一批待发送事件。返回本次成功投递的数量。
+     *
+     * <p>先原子认领（多实例互不重叠），再只处理本实例持有租约的事件。
+     * 认领与完结都带实例标识，租约被别人接走后旧实例的迟到写入不会生效。
      */
     public int dispatchPending() {
-        List<OutboxEvent> pending = outboxEventMapper.selectPendingToDispatch(BATCH_LIMIT);
+        int claimed = outboxEventMapper.claimPending(instanceId, CLAIM_LEASE_SECONDS, BATCH_LIMIT);
+        if (claimed == 0) {
+            return 0;
+        }
+        List<OutboxEvent> pending = outboxEventMapper.selectClaimedBy(instanceId);
         int sent = 0;
         for (OutboxEvent event : pending) {
             try {
                 publisher.publish(event);
-                outboxEventMapper.markSent(event.getId());
+                outboxEventMapper.markSent(event.getId(), instanceId);
                 sent++;
             } catch (Exception e) {
                 int retry = event.getRetryCount() == null ? 0 : event.getRetryCount();
                 String msg = truncate(e.getMessage());
                 if (retry >= MAX_RETRY) {
-                    outboxEventMapper.markDead(event.getId(), msg);
+                    outboxEventMapper.markDead(event.getId(), instanceId, msg);
                     log.error("Outbox 事件重试超限转 FAILED，需人工介入: eventId={} type={}",
                             event.getEventId(), event.getEventType());
                 } else {
                     // 指数退避：10s、30s、90s、270s… 避免故障期间打爆下游
                     int delay = (int) Math.min(600, 10 * Math.pow(3, retry));
-                    outboxEventMapper.markFailed(event.getId(), msg, delay);
+                    outboxEventMapper.markFailed(event.getId(), instanceId, msg, delay);
                 }
             }
         }

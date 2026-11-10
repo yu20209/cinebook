@@ -228,3 +228,53 @@ TBL	tmp_user_tx	70	InnoDB	utf8mb4_unicode_ci
 TBL	type	15	InnoDB	utf8mb4_unicode_ci		电影类型表（如剧情、喜剧、动作）	
 TBL	user	14	InnoDB	utf8mb4_unicode_ci		用户表	
 TBL	video	1	InnoDB	utf8mb4_unicode_ci		视频/预告片表	
+COL	mq_consume_log	id	bigint	NO	PRI	<null>	auto_increment
+COL	mq_consume_log	consumer_name	varchar(32)	NO	MUL	<null>	
+COL	mq_consume_log	event_id	varchar(64)	NO		<null>	
+COL	mq_consume_log	consumed_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED
+IDX	mq_consume_log	PRIMARY	non_unique=0	id	1		
+IDX	mq_consume_log	uk_consumer_event	non_unique=0	consumer_name	1		
+IDX	mq_consume_log	uk_consumer_event	non_unique=0	event_id	2		
+COL	order_notification	id	bigint	NO	PRI	<null>	auto_increment
+COL	order_notification	event_id	varchar(64)	NO	UNI	<null>	
+COL	order_notification	event_type	varchar(32)	NO		<null>	
+COL	order_notification	order_no	varchar(64)	NO	MUL	<null>	
+COL	order_notification	user_id	int	YES	MUL	<null>	
+COL	order_notification	content	varchar(255)	NO		<null>	
+COL	order_notification	created_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED
+IDX	order_notification	idx_notification_order	non_unique=1	order_no	1		
+IDX	order_notification	idx_notification_user	non_unique=1	user_id	1		
+IDX	order_notification	PRIMARY	non_unique=0	id	1		
+IDX	order_notification	uk_notification_event	non_unique=0	event_id	1		
+COL	outbox_event	id	bigint	NO	PRI	<null>	auto_increment
+COL	outbox_event	event_id	varchar(64)	NO	UNI	<null>	
+COL	outbox_event	event_type	varchar(32)	NO		<null>	
+COL	outbox_event	aggregate_id	varchar(64)	NO		<null>	
+COL	outbox_event	payload	json	YES		<null>	
+COL	outbox_event	status	varchar(16)	NO	MUL	PENDING	
+COL	outbox_event	retry_count	int	NO		0	
+COL	outbox_event	next_retry_at	datetime	YES		<null>	
+COL	outbox_event	error_msg	varchar(500)	YES		<null>	
+COL	outbox_event	claimed_by	varchar(64)	YES		<null>	
+COL	outbox_event	claimed_until	datetime	YES		<null>	
+COL	outbox_event	created_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED
+COL	outbox_event	updated_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED on update CURRENT_TIMESTAMP
+IDX	outbox_event	idx_outbox_claim	non_unique=1	status	1		
+IDX	outbox_event	idx_outbox_claim	non_unique=1	claimed_until	2		
+IDX	outbox_event	idx_outbox_status_next	non_unique=1	status	1		
+IDX	outbox_event	idx_outbox_status_next	non_unique=1	next_retry_at	2		
+IDX	outbox_event	PRIMARY	non_unique=0	id	1		
+IDX	outbox_event	uk_event_id	non_unique=0	event_id	1		
+COL	screening_seat	id	bigint	NO	PRI	<null>	auto_increment
+COL	screening_seat	record_id	int	NO	MUL	<null>	
+COL	screening_seat	seat_code	varchar(16)	NO		<null>	
+COL	screening_seat	status	tinyint	NO	MUL	0	
+COL	screening_seat	lock_order_no	varchar(64)	YES	MUL	<null>	
+COL	screening_seat	lock_expire_at	datetime	YES		<null>	
+COL	screening_seat	updated_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED on update CURRENT_TIMESTAMP
+COL	screening_seat	created_at	datetime	NO		CURRENT_TIMESTAMP	DEFAULT_GENERATED
+IDX	screening_seat	idx_seat_lock_order	non_unique=1	lock_order_no	1		
+IDX	screening_seat	idx_seat_status	non_unique=1	status	1		
+IDX	screening_seat	PRIMARY	non_unique=0	id	1		
+IDX	screening_seat	uk_record_seat	non_unique=0	record_id	1		
+IDX	screening_seat	uk_record_seat	non_unique=0	seat_code	2		

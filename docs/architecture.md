@@ -11,7 +11,10 @@
 | | jjwt | 0.11.5 |
 | | spring-security-crypto（仅 BCrypt） | BOM 托管 |
 | | Lombok / DevTools | BOM 托管 |
+| | spring-boot-starter-data-redis | BOM 托管 |
+| | spring-boot-starter-amqp | BOM 托管 |
 | 数据库 | MySQL | 8.0.37；库名 `xm-film` |
+| 中间件 | Redis 7（缓存 / Lua 限流）· RabbitMQ 3（Outbox 事件） | 均可缺省：缓存与限流降级、事件走本地直派 |
 | 前端 | Vue | 3.5 |
 | | Vue Router | 4.5 |
 | | Element Plus | 2.9 |
@@ -134,3 +137,32 @@ src/
 ```
 
 详见 `frontend.md`。
+
+## 8 高并发与事件一致性
+
+### 8.1 座位库存
+
+- 库存单位是"场次 + 座位"：`screening_seat(record_id, seat_code)` 唯一索引，状态 0 可用 / 1 锁定 / 2 售出，数据库 `CHECK` 约束兜底。
+- 锁座是一条条件更新：`UPDATE ... WHERE record_id=? AND status=0 AND seat_code IN (...)`，受影响行数必须等于座位数，否则整单回滚（不会出现"部分座位锁上、部分没锁上"的超卖）。
+- 建场次时在同一事务内按影厅行列生成座位；更换影厅时先校验 `countOccupied(record_id)=0`，无占用才清空并按新厅重建。
+- `screening_seat.record_id` 外键 `ON DELETE CASCADE`：删除场次不会留下不可达的库存行。
+
+### 8.2 下单幂等
+
+- 请求必须带 `requestId`，`UNIQUE(user_id, request_id)` 是最终防线。
+- 预查用即席查询快速返回原订单；并发落败方捕获唯一键冲突后，按 `record_id + 座位集合 + lock_order_no` 释放本次锁座（此时订单行不存在，不能依赖 `ordered` JOIN），再在新事务里读回对手提交的订单返回。
+- 同一 `requestId` 换了场次或座位 → 判定为内容冲突，返回 409，避免把上一单当成本次结果。
+
+### 8.3 缓存与限流
+
+- 缓存键带版本号（`film:ver`），写操作让版本号 +1；写缓存与失效都注册在 `afterCommit`，事务回滚不会在缓存里留下未生效的新值。
+- 下单限流用 Lua 脚本把 `INCR` 与 `PEXPIRE` 合成一次原子执行；Redis 异常时放行（数据一致性由数据库条件更新保证，不依赖限流）。
+
+### 8.4 订单事件（Outbox → MQ）
+
+- 支付/取消/退票在业务事务内写 `outbox_event`，与订单同生共死。
+- 派发任务采用**认领 + 租约**：`UPDATE ... SET status='PROCESSING', claimed_by=?, claimed_until=? ... FOR UPDATE SKIP LOCKED`，多实例取到的事件互不重叠；实例崩溃后租约到期，事件被其它实例接手。只有 `claimed_by` 匹配的实例才能标记 SENT / 退回 PENDING / 转 FAILED。
+- 失败按 `10 * 3^retry` 秒退避（上限 600s），重试 8 次后转 FAILED 保留现场。
+- RabbitMQ 分支开启发布确认 + mandatory：NACK、确认超时、消息未路由都视为失败，事件保持未完成状态等待重试；消费端手动 ACK，业务异常重试 3 次后 `basicNack(requeue=false)` 进死信队列。
+- 消费幂等：`mq_consume_log UNIQUE(consumer_name, event_id)` 跳过重复消费，`order_notification UNIQUE(event_id)` 兜住并发穿透；每消费一条事件落一条通知，而不是只打日志。
+- 默认 `ORDER_EVENT_PUBLISHER=local`（进程内直派，不依赖 broker）；设为 `rabbit` 才连接真实 MQ。

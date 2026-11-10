@@ -263,7 +263,22 @@ public class RecordService extends BaseService<Record> {
                 : normalizeStatus(recordItem.getStatus()));
         ensureRoomBelongsToCinema(recordItem);
         validateSchedule(recordItem, dbRecord.getStart());
+        // 换影厅等于换整套座位：已有订单或已占用座位时禁止，
+        // 否则旧厅座位被清空、已售出的票会失去对应库存行（无占用的场次则安全重建）。
+        boolean roomChanged = recordItem.getRoomId() != null
+                && !recordItem.getRoomId().equals(dbRecord.getRoomId());
+        if (roomChanged && seatProvisioningService != null) {
+            int occupied = seatProvisioningService.countOccupied(recordItem.getId());
+            int orders = orderedService.countByRecordId(recordItem.getId());
+            if (occupied > 0 || orders > 0) {
+                throw new CustomException(ErrorCode.BUSINESS_CONFLICT,
+                        "该场次已有订单或已占用座位，无法更换影厅；如需调整请新建场次");
+            }
+        }
         update(recordItem);
+        if (roomChanged && seatProvisioningService != null) {
+            seatProvisioningService.rebuild(recordItem);
+        }
     }
 
     /** 删除排片：校验归属，且已产生订单的场次禁止物理删除 */

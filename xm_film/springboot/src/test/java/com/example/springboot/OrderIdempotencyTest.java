@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -157,7 +158,7 @@ class OrderIdempotencyTest {
 
         orderedService.createOrder(ordered, RoleEnum.USER.name(), 8);
 
-        verify(screeningSeatMapper).releaseByOrderNo(anyString());
+        verify(screeningSeatMapper).batchReleaseSeats(eq(1), anyList(), anyString());
         assertThat(ordered.getId()).isEqualTo(77);
         assertThat(ordered.getOrders()).isEqualTo("ORDER-77");
     }
@@ -178,7 +179,7 @@ class OrderIdempotencyTest {
         assertThatThrownBy(() -> orderedService.createOrder(ordered, RoleEnum.USER.name(), 8))
                 .isInstanceOf(CustomException.class)
                 .extracting("code").isEqualTo(ErrorCode.BUSINESS_CONFLICT.code());
-        verify(screeningSeatMapper).releaseByOrderNo(anyString());
+        verify(screeningSeatMapper).batchReleaseSeats(eq(1), anyList(), anyString());
     }
 
     private static Ordered existingOrder(String seat) {

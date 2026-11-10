@@ -26,6 +26,36 @@ CREATE TABLE IF NOT EXISTS `screening_seat` (
   KEY `idx_seat_lock_order` (`lock_order_no`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='场次座位库存表（座位级锁）';
 
+-- 清理孤儿座位（场次已删但库存行还在），否则下一步外键无法建立
+DELETE ss FROM `screening_seat` ss
+LEFT JOIN `record` r ON r.id = ss.record_id
+WHERE r.id IS NULL;
+
+-- 外键：删除场次时级联清理座位，避免批量删排片留下永远不可达的库存行
+SET @fk_exists := (
+  SELECT COUNT(*) FROM information_schema.table_constraints
+  WHERE table_schema = DATABASE() AND table_name = 'screening_seat'
+    AND constraint_name = 'fk_screening_seat_record'
+);
+SET @ddl := IF(@fk_exists = 0,
+  'ALTER TABLE `screening_seat` ADD CONSTRAINT `fk_screening_seat_record` FOREIGN KEY (`record_id`) REFERENCES `record` (`id`) ON DELETE CASCADE',
+  'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- CHECK：库存状态只允许 0/1/2，挡掉绕过条件更新直接写脏值的可能
+SET @chk_exists := (
+  SELECT COUNT(*) FROM information_schema.table_constraints
+  WHERE table_schema = DATABASE() AND table_name = 'screening_seat'
+    AND constraint_name = 'chk_screening_seat_status'
+);
+SET @ddl := IF(@chk_exists = 0,
+  'ALTER TABLE `screening_seat` ADD CONSTRAINT `chk_screening_seat_status` CHECK (`status` IN (0, 1, 2))',
+  'SELECT 1');
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
 -- ------------------------------------------------------------
 -- 2. 订单表新增 request_id 并建立幂等唯一约束
 -- ------------------------------------------------------------

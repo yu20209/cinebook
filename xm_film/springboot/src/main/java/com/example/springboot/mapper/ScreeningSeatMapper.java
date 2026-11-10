@@ -97,6 +97,12 @@ public interface ScreeningSeatMapper extends BaseMapper<ScreeningSeat> {
     int insertIgnoreBatch(@Param("recordId") Integer recordId,
                           @Param("seatCodes") List<String> seatCodes);
 
+    /** 统计已锁定或已售出的座位数（换影厅前判断能否安全重建库存） */
+    int countOccupied(@Param("recordId") Integer recordId);
+
+    /** 清空场次座位行（仅用于无占用的场次更换影厅后重建） */
+    int deleteByRecordId(@Param("recordId") Integer recordId);
+
     /**
      * 清理已过期但未被及时释放的锁定座位（补偿任务调用）
      */

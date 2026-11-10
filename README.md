@@ -115,12 +115,17 @@ mysql -uroot -p xm-film < xm_film/springboot/src/test/resources/db/token_revocat
 
 ```bash
 mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V1__init_seat_inventory.sql   # 座位库存/Outbox/消费日志 3 张表 + ordered.request_id
-mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V2__backfill_seat_inventory.sql # 按影厅行列数回填座位并同步历史订单占用
-mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V3__order_notification.sql     # 消费侧通知书（事件幂等）
+mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V2__backfill_seat_inventory.sql # 生成座位行并同步仍有效订单的占用（含冲突预检）
+mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V3__order_notification.sql     # 消费侧通知表（事件幂等）
+mysql -uroot -p xm-film < xm_film/springboot/src/main/resources/db/migration/V4__outbox_multi_instance_claim.sql # Outbox 多实例认领字段与索引
 ```
 
 > `schema.sql` 是**只读结构快照**，每条建表语句前都有 `DROP TABLE`，不要把本文件对着有数据的库执行。
 > 仓库只带表结构与演示业务数据 `demo-data.sql`；影片、影院等基础种子数据需按 [`db/README.md`](xm_film/springboot/src/test/resources/db/README.md) 的口径准备后，再执行 `mysql -uroot -p xm-film < xm_film/springboot/demo-data.sql` 重置演示数据。
+>
+> **顺序要求**：`demo-data.sql` 直接插入排片、不会生成座位行，执行完必须再跑一次 `V2__backfill_seat_inventory.sql`；否则演示场次在选座图里没有座位、无法下单。`V1` / `V3` 建的表已包含在 `schema.sql` 中，新库可跳过（跑也无副作用）。
+>
+> `V2` 只回填**仍有效**的订单（未超时的待支付 → 锁定，待取票/已取票 → 售出），已取消/已退票的订单不会参与，也不会反向清空别人已买的座位；若同一座位存在多个有效订单会直接中止迁移，需先人工清理冲突数据。
 
 ### 2. 启动后端（9090）
 

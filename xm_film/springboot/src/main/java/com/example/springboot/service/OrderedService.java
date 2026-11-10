@@ -221,7 +221,9 @@ public class OrderedService extends BaseService<Ordered> {
             // 两个请求同时通过上面的预查（都还没插），只有一个插入成功。
             // 落败方先释放本事务刚锁的座位（否则这些座位会一直锁到超时补偿），
             // 再用独立事务读出对手提交的原订单返回 —— 客户端拿到的是"同一笔订单"而不是 409。
-            screeningSeatMapper.releaseByOrderNo(orderNo);
+            // 必须按 record_id + 座位集合 + lock_order_no 释放：此刻订单行并未插入成功，
+            // 任何依赖 ordered 表 JOIN 的释放语句都匹配不到任何行。
+            screeningSeatMapper.batchReleaseSeats(recordItem.getId(), seats, orderNo);
             Ordered existing = findExistingOrder(ordered.getUserId(), ordered.getRequestId());
             if (existing == null) {
                 throw new CustomException(ErrorCode.BUSINESS_CONFLICT, "订单已提交，请勿重复下单");

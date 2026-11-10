@@ -14,8 +14,9 @@
 | 脚本 | 内容 |
 | --- | --- |
 | `V1__init_seat_inventory.sql` | 结构变更：`screening_seat`、`outbox_event`、`mq_consume_log`，`ordered.request_id` + `uk_ordered_user_request`；可重复执行 |
-| `V2__backfill_seat_inventory.sql` | 数据迁移：按影厅行列数为既有场次生成座位，并把历史订单状态同步到库存；`INSERT IGNORE` 幂等 |
+| `V2__backfill_seat_inventory.sql` | 数据迁移：按影厅行列数为既有场次生成座位，只回填**仍有效**订单的占用（未超时待支付→锁定，待取票/已取票→售出）；先做冲突预检，命中多个有效订单直接中止；`INSERT IGNORE` 幂等 |
 | `V3__order_notification.sql` | 消费侧业务表：`order_notification`（`event_id` 唯一，重复投递不重复通知） |
+| `V4__outbox_multi_instance_claim.sql` | Outbox 多实例认领：`outbox_event` 增加 `claimed_by` / `claimed_until` 与 `(status, claimed_until)` 索引 |
 
 ## 口径
 

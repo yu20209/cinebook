@@ -13,6 +13,8 @@
         <result column="retry_count" property="retryCount"/>
         <result column="next_retry_at" property="nextRetryAt"/>
         <result column="error_msg" property="errorMsg"/>
+        <result column="claimed_by" property="claimedBy"/>
+        <result column="claimed_until" property="claimedUntil"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
@@ -22,35 +24,82 @@
         VALUES (#{eventId}, #{eventType}, #{aggregateId}, #{payload}, #{status}, 0, NOW())
     </insert>
 
-    <!-- 待派发：PENDING 且已到重试时间；按 id 升序保证同订单事件相对有序 -->
-    <select id="selectPendingToDispatch" resultMap="outboxEventMap">
+    <!--
+      认领一批事件（多实例安全）：
+        · PENDING 且已到重试时间
+        · PROCESSING 但租约已过期（实例崩溃后由其它实例接手）
+      FOR UPDATE SKIP LOCKED 让并发实例各取各的，不相互排队；
+      外层再包一层派生表，避免 MySQL "不能更新正在查询的同一张表" 限制。
+    -->
+    <update id="claimPending">
+        UPDATE outbox_event
+        SET status = 'PROCESSING',
+            claimed_by = #{owner},
+            claimed_until = NOW() + INTERVAL #{leaseSeconds} SECOND,
+            updated_at = NOW()
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id FROM outbox_event
+                WHERE (status = 'PENDING'
+                       AND (next_retry_at IS NULL OR next_retry_at &lt;= NOW()))
+                   OR (status = 'PROCESSING'
+                       AND (claimed_until IS NULL OR claimed_until &lt; NOW()))
+                ORDER BY id
+                LIMIT #{limit}
+                FOR UPDATE SKIP LOCKED
+            ) candidate
+        )
+    </update>
+
+    <!-- 本实例持有且租约仍有效的事件，按 id 升序保证同一订单的事件顺序 -->
+    <select id="selectClaimedBy" resultMap="outboxEventMap">
         SELECT * FROM outbox_event
-        WHERE status = 'PENDING'
-          AND (next_retry_at IS NULL OR next_retry_at &lt;= NOW())
+        WHERE status = 'PROCESSING'
+          AND claimed_by = #{owner}
+          AND claimed_until IS NOT NULL
+          AND claimed_until &gt;= NOW()
         ORDER BY id
-        LIMIT #{limit}
     </select>
 
+    <!-- 成功：只允许持有租约的认领者确认，防止租约被接走后旧实例误标 -->
     <update id="markSent">
         UPDATE outbox_event
-        SET status = 'SENT', updated_at = NOW()
-        WHERE id = #{id}
-    </update>
-
-    <!-- 失败：指数退避由调用方算好后传入秒数（10s、30s、90s…） -->
-    <update id="markFailed">
-        UPDATE outbox_event
-        SET retry_count = retry_count + 1,
-            next_retry_at = NOW() + INTERVAL #{retryDelaySeconds} SECOND,
-            error_msg = #{errorMsg},
+        SET status = 'SENT',
+            claimed_by = NULL,
+            claimed_until = NULL,
+            error_msg = NULL,
             updated_at = NOW()
         WHERE id = #{id}
+          AND status = 'PROCESSING'
+          AND claimed_by = #{owner}
     </update>
 
+    <!-- 失败：退回 PENDING 并释放认领，指数退避秒数由调用方算好传入 -->
+    <update id="markFailed">
+        UPDATE outbox_event
+        SET status = 'PENDING',
+            retry_count = retry_count + 1,
+            next_retry_at = NOW() + INTERVAL #{retryDelaySeconds} SECOND,
+            error_msg = #{errorMsg},
+            claimed_by = NULL,
+            claimed_until = NULL,
+            updated_at = NOW()
+        WHERE id = #{id}
+          AND status = 'PROCESSING'
+          AND claimed_by = #{owner}
+    </update>
+
+    <!-- 重试耗尽：终结为 FAILED，保留错误信息便于排查 -->
     <update id="markDead">
         UPDATE outbox_event
-        SET status = 'FAILED', error_msg = #{errorMsg}, updated_at = NOW()
+        SET status = 'FAILED',
+            error_msg = #{errorMsg},
+            claimed_by = NULL,
+            claimed_until = NULL,
+            updated_at = NOW()
         WHERE id = #{id}
+          AND status = 'PROCESSING'
+          AND claimed_by = #{owner}
     </update>
 
 </mapper>

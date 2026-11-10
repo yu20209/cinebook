@@ -75,6 +75,29 @@ public class ScreeningSeatProvisioningService {
         return inserted;
     }
 
+    /** 统计已锁定或已售出的座位数：换影厅前必须先确认没有任何占用 */
+    public int countOccupied(Integer recordId) {
+        if (recordId == null) {
+            return 0;
+        }
+        return screeningSeatMapper.countOccupied(recordId);
+    }
+
+    /**
+     * 按场次当前影厅重建座位库存：先清空旧厅的座位行，再按新厅行列数生成。
+     *
+     * <p>只允许在没有任何占用时调用（由调用方先校验 countOccupied == 0），
+     * 否则会抹掉别人已经买下的座位。
+     */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public int rebuild(Record record) {
+        if (record == null || record.getId() == null) {
+            return 0;
+        }
+        screeningSeatMapper.deleteByRecordId(record.getId());
+        return provision(record);
+    }
+
     /** 行列数归一：空值/非正数用默认值，超过上限按上限截断，防止一次生成海量座位 */
     private static int clamp(Integer value, int defaultValue, int max) {
         if (value == null || value <= 0) {

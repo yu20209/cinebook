@@ -30,15 +30,20 @@ public class OutboxEvent implements Serializable {
     private String aggregateId;
     /** 事件载荷（JSON 快照） */
     private String payload;
-    /** PENDING / SENT / FAILED */
+    /** PENDING / PROCESSING / SENT / FAILED */
     private String status;
     private Integer retryCount;
     private String nextRetryAt;
     private String errorMsg;
+    /** 当前认领该事件的实例标识（PROCESSING 时有值） */
+    private String claimedBy;
+    /** 认领租约到期时间：到期未完成会被其它实例重新认领 */
+    private String claimedUntil;
     private String createdAt;
     private String updatedAt;
 
     public static final String STATUS_PENDING = "PENDING";
+    public static final String STATUS_PROCESSING = "PROCESSING";
     public static final String STATUS_SENT = "SENT";
     public static final String STATUS_FAILED = "FAILED";
 

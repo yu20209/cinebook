@@ -201,6 +201,10 @@ CREATE TABLE `room` (
   CONSTRAINT `room_ibfk_1` FOREIGN KEY (`cinema_id`) REFERENCES `cinema` (`id`) ON DELETE RESTRICT
 ) ENGINE=InnoDB AUTO_INCREMENT=656 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='放映厅表';
 
+-- screening_seat 对 record 有 ON DELETE CASCADE 外键，
+-- 必须先于 record 删除，否则 DROP TABLE record 会被外键拦住
+DROP TABLE IF EXISTS `screening_seat`;
+
 DROP TABLE IF EXISTS `record`;
 CREATE TABLE `record` (
   `id` int NOT NULL AUTO_INCREMENT COMMENT '放映记录ID',
@@ -328,7 +332,9 @@ CREATE TABLE `screening_seat` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_record_seat` (`record_id`, `seat_code`),
   KEY `idx_seat_status` (`status`),
-  KEY `idx_seat_lock_order` (`lock_order_no`)
+  KEY `idx_seat_lock_order` (`lock_order_no`),
+  CONSTRAINT `fk_screening_seat_record` FOREIGN KEY (`record_id`) REFERENCES `record` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `chk_screening_seat_status` CHECK (`status` IN (0, 1, 2))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='场次座位库存表（座位级锁）';
 
 DROP TABLE IF EXISTS `outbox_event`;
@@ -338,15 +344,18 @@ CREATE TABLE `outbox_event` (
   `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'ORDER_PAID / ORDER_CANCELLED / ORDER_REFUNDED',
   `aggregate_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '订单号',
   `payload` json DEFAULT NULL COMMENT '完整订单快照',
-  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING / SENT / FAILED',
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING / PROCESSING / SENT / FAILED',
   `retry_count` int NOT NULL DEFAULT '0',
   `next_retry_at` datetime DEFAULT NULL,
   `error_msg` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `claimed_by` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '认领实例标识（PROCESSING 时有值）',
+  `claimed_until` datetime DEFAULT NULL COMMENT '认领租约到期时间，过期后允许其它实例重新认领',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_event_id` (`event_id`),
-  KEY `idx_outbox_status_next` (`status`, `next_retry_at`)
+  KEY `idx_outbox_status_next` (`status`, `next_retry_at`),
+  KEY `idx_outbox_claim` (`status`, `claimed_until`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Outbox 事件表';
 
 DROP TABLE IF EXISTS `mq_consume_log`;
