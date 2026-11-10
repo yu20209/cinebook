@@ -43,6 +43,12 @@
 		</dependency>
 
 		<!-- ===================== 数据访问依赖 ===================== -->
+		<!-- RabbitMQ：Outbox 事件的真实投递通道（order-event.publisher=rabbit 时启用） -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-amqp</artifactId>
+		</dependency>
+
 		<!-- Redis：热点数据缓存 + 下单限流（服务不可用时业务自动降级为直查数据库） -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

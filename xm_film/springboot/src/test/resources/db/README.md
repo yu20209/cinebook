@@ -5,9 +5,17 @@
 
 | 文件 | 内容 | 性质 |
 | --- | --- | --- |
-| `schema.sql` | 18 张业务表的 `SHOW CREATE TABLE` 原样输出（含列注释、索引、外键），另有演示脚本残留的 `tmp_user_tx` | 只读快照 |
+| `schema.sql` | 业务表 + `tmp_user_tx` 的 `SHOW CREATE TABLE` 原样输出（含列注释、索引、外键），已包含 `screening_seat` / `outbox_event` / `mq_consume_log` / `order_notification` 与 `ordered.request_id` | 只读快照 |
 | `token_revocation.sql` | `ALTER TABLE`：给 `admin` / `user` / `cinema` 补 `token_revoked_before` 列 | 可重复执行，重建空库后由 README 里的流程执行 |
 | `inventory.tsv` | 列 / 索引 / 表三合一的逐行清单，便于 grep | 只读快照 |
+
+版本化迁移脚本在 `src/main/resources/db/migration/`，按顺序执行：
+
+| 脚本 | 内容 |
+| --- | --- |
+| `V1__init_seat_inventory.sql` | 结构变更：`screening_seat`、`outbox_event`、`mq_consume_log`，`ordered.request_id` + `uk_ordered_user_request`；可重复执行 |
+| `V2__backfill_seat_inventory.sql` | 数据迁移：按影厅行列数为既有场次生成座位，并把历史订单状态同步到库存；`INSERT IGNORE` 幂等 |
+| `V3__order_notification.sql` | 消费侧业务表：`order_notification`（`event_id` 唯一，重复投递不重复通知） |
 
 ## 口径
 
@@ -43,7 +51,10 @@ python dump-schema.py          # MYSQL_EXE 可用环境变量覆盖 mysql 客户
   `cinema.status` 与 `user/admin/cinema.role`；非法取值由 MySQL 拒绝（`StatusConstraintLoadTest` 钉住）。
 - `film.box_office` 列注释明确写着「已废弃…此列恒为 0」，与 `FilmMapper.filmRevenueJoin` 的
   实时聚合口径一致（实测 64 行全为 0）。
-- `ordered.seat` 为 `varchar(200)`，座位串以逗号分隔存于单列，故占用判定只能走
-  `FIND_IN_SET`，无法在库端建座位级唯一索引。
+- `ordered.seat` 为 `varchar(200)`，座位串以逗号分隔存于单列。座位级占用已迁到
+  `screening_seat (record_id, seat_code)` 唯一索引上，由条件更新原子加锁；`ordered.seat`
+  仅保留为订单快照，不再承担占用判定。
+- `ordered.request_id` + `uk_ordered_user_request (user_id, request_id)`：同一用户同一请求
+  标识只能落一单，是并发重复提交的库级兜底。
 - `type.title` 于 2026-10-27 补了 `uk_type_title`：重复分类无法再落库（此前管理端可把
   「剧情」建两次），`TypeTitleUniqueTest` 钉住；重复键由 `GlobalExceptionHandler` 映射为 409。

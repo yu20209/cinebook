@@ -15,6 +15,7 @@ import com.example.springboot.exception.CustomException;
 import com.example.springboot.mapper.FilmMapper;
 import com.example.springboot.mapper.RecordMapper;
 import com.example.springboot.mapper.RoomMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,6 +61,14 @@ public class RecordService extends BaseService<Record> {
     private final RoomMapper roomMapper;
 
     private final OrderedService orderedService;
+
+    /** 场次落库后初始化座位库存（可空：单测直接 new 时不带库存组件） */
+    private ScreeningSeatProvisioningService seatProvisioningService;
+
+    @Autowired(required = false)
+    public void setSeatProvisioningService(ScreeningSeatProvisioningService seatProvisioningService) {
+        this.seatProvisioningService = seatProvisioningService;
+    }
 
     public RecordService(RecordMapper recordMapper, FilmMapper filmMapper,
                          RoomMapper roomMapper, OrderedService orderedService) {
@@ -222,6 +231,10 @@ public class RecordService extends BaseService<Record> {
         ensureRoomBelongsToCinema(recordItem);
         validateSchedule(recordItem, null);
         add(recordItem);
+        // 同一事务内初始化座位库存：失败则场次一起回滚，不留下无法售卖的场次
+        if (seatProvisioningService != null) {
+            seatProvisioningService.provision(recordItem);
+        }
     }
 
     /** 编辑排片：先校验归属，再按局部更新口径补全缺省字段，最后校验影厅归属与排期 */

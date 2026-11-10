@@ -165,6 +165,15 @@
           AND ss.lock_order_no = #{orderNo}
     </update>
 
+    <!-- 新建场次时批量生成座位：INSERT IGNORE 依赖 uk_record_seat，重复执行安全 -->
+    <insert id="insertIgnoreBatch">
+        INSERT IGNORE INTO screening_seat (record_id, seat_code, status)
+        VALUES
+        <foreach collection="seatCodes" item="code" separator=",">
+            (#{recordId}, #{code}, 0)
+        </foreach>
+    </insert>
+
     <!-- 补偿：清理已过期但未被及时释放的锁定座位（定时任务兜底） -->
     <update id="cleanupExpiredLocks">
         UPDATE screening_seat

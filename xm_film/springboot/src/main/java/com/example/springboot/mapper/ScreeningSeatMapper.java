@@ -91,6 +91,13 @@ public interface ScreeningSeatMapper extends BaseMapper<ScreeningSeat> {
     int markSoldByOrderNo(@Param("orderNo") String orderNo);
 
     /**
+     * 批量初始化场次座位（INSERT IGNORE）：新建场次时按影厅行列数生成，
+     * 已存在的座位行保持不变，重复调用安全。
+     */
+    int insertIgnoreBatch(@Param("recordId") Integer recordId,
+                          @Param("seatCodes") List<String> seatCodes);
+
+    /**
      * 清理已过期但未被及时释放的锁定座位（补偿任务调用）
      */
     int cleanupExpiredLocks();

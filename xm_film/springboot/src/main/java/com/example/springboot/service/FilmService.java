@@ -86,10 +86,10 @@ public class FilmService extends BaseService<Film> {
         return "film:list:" + ver + ":" + Math.abs(cond.hashCode());
     }
 
-    /** 影片写操作后让缓存整体失效（版本号 +1） */
+    /** 影片写操作后让缓存整体失效（版本号 +1）；必须等事务提交，回滚时缓存保持不变 */
     private void invalidateFilmCache() {
         if (cacheService != null) {
-            cacheService.bumpFilmVersion();
+            cacheService.bumpFilmVersionAfterCommit();
         }
     }
 
@@ -106,7 +106,8 @@ public class FilmService extends BaseService<Film> {
         List<Film> list = mapper().selectAll(film);
         fillFilmTypes(list);
         if (cacheService != null) {
-            cacheService.put(key, list, null);
+            // 提交后再写缓存：事务回滚时不留下这次查询的结果
+            cacheService.putAfterCommit(key, list, null);
         }
         return list;
     }
@@ -128,7 +129,7 @@ public class FilmService extends BaseService<Film> {
         if (film != null) {
             fillFilmTypes(List.of(film));
             if (cacheService != null) {
-                cacheService.put(key, film, null);
+                cacheService.putAfterCommit(key, film, null);
             }
         }
         return film;

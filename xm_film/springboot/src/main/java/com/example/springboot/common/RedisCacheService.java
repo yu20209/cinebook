@@ -6,6 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 
@@ -83,6 +85,44 @@ public class RedisCacheService {
                     ttl == null ? DEFAULT_TTL : ttl);
         } catch (Exception e) {
             log.warn("写入缓存失败 key={}（忽略）: {}", key, e.getMessage());
+        }
+    }
+
+    /**
+     * 把缓存写操作推迟到事务提交之后执行：事务回滚时不会在缓存里留下未生效的新值。
+     * 无事务上下文时立即执行（读路径行为不变）。
+     */
+    public void afterCommit(Runnable action) {
+        if (action == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            runQuietly(action);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                runQuietly(action);
+            }
+        });
+    }
+
+    /** 提交后再写缓存 */
+    public void putAfterCommit(String key, Object value, Duration ttl) {
+        afterCommit(() -> put(key, value, ttl));
+    }
+
+    /** 提交后再让影片域缓存整体失效 */
+    public void bumpFilmVersionAfterCommit() {
+        afterCommit(this::bumpFilmVersion);
+    }
+
+    private static void runQuietly(Runnable action) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            log.warn("事务提交后的缓存操作失败（忽略）: {}", e.getMessage());
         }
     }
 }

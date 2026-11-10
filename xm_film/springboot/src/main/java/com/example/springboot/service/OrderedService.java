@@ -48,6 +48,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * 订单状态机与座位占用的唯一出处：选座建单（锁座、超时废单）、支付、取消、退票、
@@ -124,6 +125,14 @@ public class OrderedService extends BaseService<Ordered> {
         this.outboxService = outboxService;
     }
 
+    /** 幂等查询（可空：同上）；并发重复提交时用独立事务读已提交的原订单 */
+    private OrderIdempotencyService idempotencyService;
+
+    @Autowired(required = false)
+    public void setIdempotencyService(OrderIdempotencyService idempotencyService) {
+        this.idempotencyService = idempotencyService;
+    }
+
     public OrderedService(OrderedMapper orderedMapper, RecordMapper recordMapper, FilmMapper filmMapper,
                           RoomMapper roomMapper, CinemaMapper cinemaMapper,
                           ScreeningSeatMapper screeningSeatMapper,
@@ -177,9 +186,10 @@ public class OrderedService extends BaseService<Ordered> {
         // 场景：用户点"提交订单"后网络超时、前端自动重试，第二次请求已带同一 request_id。
         // 若不做这一步，第二次会再锁一次座位、再插一条订单 —— 同一笔业务扣两遍。
         if (ordered.getRequestId() != null && !ordered.getRequestId().isBlank()) {
-            Ordered existing = orderedMapper.selectByUserAndRequestId(
-                    ordered.getUserId(), ordered.getRequestId());
+            Ordered existing = findExistingOrder(ordered.getUserId(), ordered.getRequestId());
             if (existing != null) {
+                // 同一标识必须对应同一份下单内容，否则说明标识被复用/伪造，不能把别的订单返回给用户
+                ensureSameRequestPayload(existing, ordered);
                 // 把已存在的订单回填到入参对象：调用方（Controller）用它拼响应，
                 // 重复提交拿到的必须是"原来那一单"，而不是一个空壳。
                 BeanUtils.copyProperties(existing, ordered);
@@ -208,10 +218,41 @@ public class OrderedService extends BaseService<Ordered> {
             orderedMapper.insert(ordered);
         } catch (DuplicateKeyException e) {
             // ===== 幂等第二道闸：并发重复提交时，唯一索引 UNIQUE(user_id, request_id) 兜底 =====
-            // 两个请求同时通过上面的查询（都还没插），只有一个插入成功；
-            // 落败方在这里捕获唯一键冲突，随后整体回滚 —— 刚锁的座位随之释放，
-            // 不会留下"座位被锁、订单却没建成"的孤儿数据。
-            throw new CustomException(ErrorCode.BUSINESS_CONFLICT, "订单已提交，请勿重复下单");
+            // 两个请求同时通过上面的预查（都还没插），只有一个插入成功。
+            // 落败方先释放本事务刚锁的座位（否则这些座位会一直锁到超时补偿），
+            // 再用独立事务读出对手提交的原订单返回 —— 客户端拿到的是"同一笔订单"而不是 409。
+            screeningSeatMapper.releaseByOrderNo(orderNo);
+            Ordered existing = findExistingOrder(ordered.getUserId(), ordered.getRequestId());
+            if (existing == null) {
+                throw new CustomException(ErrorCode.BUSINESS_CONFLICT, "订单已提交，请勿重复下单");
+            }
+            ensureSameRequestPayload(existing, ordered);
+            BeanUtils.copyProperties(existing, ordered);
+        }
+    }
+
+    /** 独立事务优先（能看到并发对手刚提交的订单），组件缺失时回退当前事务查询 */
+    private Ordered findExistingOrder(Integer userId, String requestId) {
+        if (idempotencyService != null) {
+            return idempotencyService.findByUserAndRequestId(userId, requestId);
+        }
+        return orderedMapper.selectByUserAndRequestId(userId, requestId);
+    }
+
+    /**
+     * 同一 requestId 只能对应同一份下单内容：场次一致、座位集合一致。
+     * 复用标识却换了内容（换了场次/座位）时拒绝，避免把上一次的订单当作本次结果返回。
+     */
+    private static void ensureSameRequestPayload(Ordered existing, Ordered current) {
+        boolean sameRecord = existing.getRecordId() != null
+                && existing.getRecordId().equals(current.getRecordId());
+        Set<String> existingSeats = new TreeSet<>();
+        splitSeats(existing.getSeat()).forEach(seat -> existingSeats.add(seat.trim()));
+        Set<String> currentSeats = new TreeSet<>();
+        splitSeats(current.getSeat()).forEach(seat -> currentSeats.add(seat.trim()));
+        if (!sameRecord || !existingSeats.equals(currentSeats)) {
+            throw new CustomException(ErrorCode.BUSINESS_CONFLICT,
+                    "同一请求标识提交了不同订单内容，请刷新页面重试");
         }
     }
 

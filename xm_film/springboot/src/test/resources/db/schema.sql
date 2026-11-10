@@ -246,9 +246,11 @@ CREATE TABLE `ordered` (
   `refund_time` datetime DEFAULT NULL COMMENT '退票时间（资金凭证）',
   `refund_amount` decimal(10,2) DEFAULT NULL COMMENT '退款金额（元）',
   `pickup_code` varchar(20) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '取票码（支付成功时生成，一单一码；核销即作废，有效期到放映结束）',
+  `request_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '下单幂等标识（前端每次提交生成，重复提交据此返回原订单）',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_ordered_orders` (`orders`),
   UNIQUE KEY `uk_ordered_pickup_code` (`pickup_code`),
+  UNIQUE KEY `uk_ordered_user_request` (`user_id`,`request_id`),
   KEY `idx_ordered_record_id` (`record_id`),
   KEY `idx_ordered_user_id` (`user_id`),
   KEY `idx_ordered_film_id` (`film_id`),
@@ -307,3 +309,67 @@ CREATE TABLE `video` (
   `start` date DEFAULT NULL COMMENT '上映日期',
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=53 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='视频/预告片表';
+
+-- ============================================================
+-- 座位库存 / Outbox / 消费幂等 / 订单通知
+-- 与 db/migration/V1~V3 保持一致
+-- ============================================================
+
+DROP TABLE IF EXISTS `screening_seat`;
+CREATE TABLE `screening_seat` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `record_id` int NOT NULL COMMENT '场次ID',
+  `seat_code` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '座位编号，如 1排1座',
+  `status` tinyint NOT NULL DEFAULT '0' COMMENT '0 可用、1 已锁定、2 已售出',
+  `lock_order_no` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '当前锁定该座位的订单号（status=1 时有值）',
+  `lock_expire_at` datetime DEFAULT NULL COMMENT '锁定过期时间（status=1 时有值）',
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_record_seat` (`record_id`, `seat_code`),
+  KEY `idx_seat_status` (`status`),
+  KEY `idx_seat_lock_order` (`lock_order_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='场次座位库存表（座位级锁）';
+
+DROP TABLE IF EXISTS `outbox_event`;
+CREATE TABLE `outbox_event` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `event_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '全局唯一事件编号（UUID）',
+  `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'ORDER_PAID / ORDER_CANCELLED / ORDER_REFUNDED',
+  `aggregate_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '订单号',
+  `payload` json DEFAULT NULL COMMENT '完整订单快照',
+  `status` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING / SENT / FAILED',
+  `retry_count` int NOT NULL DEFAULT '0',
+  `next_retry_at` datetime DEFAULT NULL,
+  `error_msg` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_event_id` (`event_id`),
+  KEY `idx_outbox_status_next` (`status`, `next_retry_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Outbox 事件表';
+
+DROP TABLE IF EXISTS `mq_consume_log`;
+CREATE TABLE `mq_consume_log` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `consumer_name` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '消费者名称',
+  `event_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '事件编号',
+  `consumed_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_consumer_event` (`consumer_name`, `event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MQ 消费幂等记录';
+
+DROP TABLE IF EXISTS `order_notification`;
+CREATE TABLE `order_notification` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `event_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '来源事件编号，唯一',
+  `event_type` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'ORDER_PAID / ORDER_CANCELLED / ORDER_REFUNDED',
+  `order_no` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '订单号',
+  `user_id` int DEFAULT NULL COMMENT '下单用户ID',
+  `content` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '通知内容',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_notification_event` (`event_id`),
+  KEY `idx_notification_user` (`user_id`),
+  KEY `idx_notification_order` (`order_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='订单事件通知（消费侧业务落库）';

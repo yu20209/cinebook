@@ -31,6 +31,25 @@ spring:
       connect-timeout: 1s
       timeout: 1s
 
+  # RabbitMQ：仅当 app.order-event.publisher=rabbit 时才真正连接（本机没有 broker 时用 local 模式启动）。
+  # publisher-confirm-type=correlated + publisher-returns：发布端同步等待 broker 确认，未确认即抛错交给 Outbox 重试。
+  # listener.simple.acknowledge-mode=manual：消费端处理成功才 ACK，失败重试后进死信队列。
+  rabbitmq:
+    host: "${RABBITMQ_HOST:localhost}"
+    port: "${RABBITMQ_PORT:5672}"
+    username: "${RABBITMQ_USERNAME:guest}"
+    password: "${RABBITMQ_PASSWORD:guest}"
+    virtual-host: "${RABBITMQ_VHOST:/}"
+    connection-timeout: 3s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+        concurrency: 1
+        max-concurrency: 2
+
 mybatis:
   configuration:
     log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
@@ -69,3 +88,24 @@ amap:
   # 相邻高德请求的最小间隔（毫秒）。个人 Key 的 QPS 上限实测约 5 次/秒，
   # 导入会背靠背发几十个请求，间隔 300ms（≈3.3 QPS）留出余量。
   request-interval-ms: 300
+
+app:
+  # 订单事件投递方式：
+  #   local  —— 进程内直接交给消费者，不依赖 MQ（本机/测试默认，保证没有 broker 也能启动）
+  #   rabbit —— 走真实 RabbitMQ（需先启动 docker-compose 里的 rabbitmq）
+  order-event:
+    publisher: "${ORDER_EVENT_PUBLISHER:local}"
+    exchange: cinebook.order.exchange
+    queue: cinebook.order.queue
+    routing-key: cinebook.order.created
+    dead-letter-exchange: cinebook.order.dlx
+    dead-letter-queue: cinebook.order.dlq
+    dead-letter-routing-key: cinebook.order.dead
+
+  # Outbox 派发任务轮询间隔（毫秒）
+  outbox:
+    dispatch-interval-ms: "${OUTBOX_DISPATCH_INTERVAL_MS:3000}"
+
+  # 座位锁过期补偿任务轮询间隔（毫秒）
+  seat:
+    cleanup-interval-ms: "${SEAT_CLEANUP_INTERVAL_MS:60000}"

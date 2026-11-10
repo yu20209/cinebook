@@ -1,0 +1,62 @@
+# CineBook 本地依赖：MySQL + Redis + RabbitMQ
+#
+# 用法：
+#   docker compose up -d          # 启动全部
+#   docker compose ps             # 查看健康状态
+#   docker compose down           # 停止（数据卷保留）
+#
+# 启动后按 README「初始化数据库」的顺序执行 schema.sql 与 db/migration 下的迁移脚本。
+# 若保持 ORDER_EVENT_PUBLISHER=local，可以只启动 mysql 与 redis，不启动 rabbitmq。
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: cinebook-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: "xm-film"
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - cinebook-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: cinebook-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: cinebook-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # 管理控制台 http://localhost:15672
+    volumes:
+      - cinebook-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  cinebook-mysql-data:
+  cinebook-rabbitmq-data:
