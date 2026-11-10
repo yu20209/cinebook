@@ -174,7 +174,7 @@ class OrderedServiceTest {
      */
     @Test
     void createOrderLocksSeatsAtomicallyAndInsertsOrder() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -188,7 +188,7 @@ class OrderedServiceTest {
 
     @Test
     void createOrderRejectsSeatAlreadyActive() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         // 条件更新一个座位都没锁上 —— 等价于「座位已被他人占用」
         when(screeningSeatMapper.batchLockSeats(anyInt(), anyList(), anyString(), anyInt())).thenReturn(0);
 
@@ -208,7 +208,7 @@ class OrderedServiceTest {
      */
     @Test
     void createOrderRejectsPartiallyLockedSeats() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         when(screeningSeatMapper.batchLockSeats(anyInt(), anyList(), anyString(), anyInt())).thenReturn(1);
 
         Ordered ordered = new Ordered();
@@ -224,7 +224,7 @@ class OrderedServiceTest {
     /** 入参里的全角逗号要归一成半角后再锁座，否则会拿错误座位码去更新 */
     @Test
     void createOrderNormalizesFullWidthCommaBeforeLocking() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -244,7 +244,7 @@ class OrderedServiceTest {
         recordRow.setFilmId(24);
         recordRow.setPrice("45.00");
         recordRow.setStart("2020-01-01 10:00");
-        when(recordMapper.selectById(1)).thenReturn(recordRow);
+        when(recordMapper.selectByIdForShare(1)).thenReturn(recordRow);
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -274,7 +274,7 @@ class OrderedServiceTest {
         recordRow.setRoomId(7);
         recordRow.setPrice("abc");
         recordRow.setStart(futureStart());
-        when(recordMapper.selectById(1)).thenReturn(recordRow);
+        when(recordMapper.selectByIdForShare(1)).thenReturn(recordRow);
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -295,7 +295,7 @@ class OrderedServiceTest {
         recordRow.setPrice("45.00");
         recordRow.setStatus("停售");
         recordRow.setStart(futureStart());
-        when(recordMapper.selectById(1)).thenReturn(recordRow);
+        when(recordMapper.selectByIdForShare(1)).thenReturn(recordRow);
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -541,7 +541,7 @@ class OrderedServiceTest {
 
     @Test
     void seatWithinRoomLayoutIsAcceptedAndOutsideIsRejected() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         Room room = new Room();
         room.setId(7);
         room.setSeatRows(6);
@@ -565,7 +565,7 @@ class OrderedServiceTest {
     /** 影厅未配置座位数时退回 8×8，保证存量数据仍可下单 */
     @Test
     void seatFallsBackToDefaultEightByEightWhenRoomHasNoLayout() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         Room room = new Room();
         room.setId(7);
         when(roomMapper.selectById(7)).thenReturn(room);
@@ -581,7 +581,7 @@ class OrderedServiceTest {
 
     @Test
     void moreThanSixSeatsInOneOrderIsRejected() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -597,7 +597,7 @@ class OrderedServiceTest {
     /** 下单只锁座不扣款：钱包必须等到支付时才被触碰 */
     @Test
     void createOrderDoesNotTouchWallet() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);
@@ -609,7 +609,7 @@ class OrderedServiceTest {
 
     @Test
     void createOrderSnapshotsUnitPrice() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
 
         Ordered ordered = new Ordered();
         ordered.setRecordId(1);

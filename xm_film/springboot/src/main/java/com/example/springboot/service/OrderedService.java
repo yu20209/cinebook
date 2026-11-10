@@ -258,9 +258,20 @@ public class OrderedService extends BaseService<Ordered> {
         }
     }
 
-    /** 仅校验场次可售性（不加行锁）—— 座位占用已由 screening_seat 条件更新承担 */
+    /**
+     * 校验场次可售性，并对场次行加共享锁（FOR SHARE）。
+     *
+     * <p>共享锁允许多个下单事务并发持有，但会阻塞 {@code RecordService.updateScoped}
+     * 对场次行的排他锁（FOR UPDATE），反之亦然。这样"改影厅→删旧座位→重建"
+     * 与"下单→锁旧座位→建单"就不会交叉执行：
+     * <ul>
+     *   <li>改影厅先拿到排他锁：下单等待，改完后下单锁的是新厅座位；</li>
+     *   <li>下单先拿到共享锁：改影厅等待，下单提交后改影厅读到已占用并拒绝。</li>
+     * </ul>
+     * 座位占用本身仍由 {@code screening_seat} 的条件更新承担。
+     */
     private Record validatePurchasableRecord(Integer recordId) {
-        Record recordItem = recordMapper.selectById(recordId);
+        Record recordItem = recordMapper.selectByIdForShare(recordId);
         if (recordItem == null) {
             throw new CustomException(ErrorCode.PARAM_INVALID, "放映场次不存在");
         }

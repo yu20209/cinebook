@@ -55,6 +55,14 @@
         SELECT * FROM record WHERE id = #{id} FOR UPDATE
     </select>
 
+    <!-- 下单路径：对场次行加共享锁。多个下单事务可并发持有，但会阻塞
+         updateScoped 的排他锁（FOR UPDATE），反之亦然，从而消除
+         "改影厅清空旧座位" 与 "下单锁定旧座位" 交叉执行的竞争窗口。 -->
+    <select id="selectByIdForShare" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Record">
+        SELECT * FROM record WHERE id = #{id} FOR SHARE
+    </select>
+
     <!-- 同一影厅时段冲突检测（已停售的场次不占用影厅）。
          **必须 FOR UPDATE，不能去掉**：调用方在 REPEATABLE-READ 下先锁 room 行再调本语句，
          而普通 SELECT 是一致性非锁定读，读的是事务开始时的快照 —— 等锁期间对方刚提交的

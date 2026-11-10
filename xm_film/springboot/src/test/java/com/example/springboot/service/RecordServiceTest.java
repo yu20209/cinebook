@@ -189,6 +189,8 @@ class RecordServiceTest {
         db.setFilmId(3);
         db.setPrice("40.00");
         db.setStatus(RecordStatus.NORMAL);
+        when(recordMapper.selectByIdForUpdate(5)).thenReturn(db);
+        // BaseService.update 用 selectById 做存在性校验
         when(recordMapper.selectById(5)).thenReturn(db);
 
         Film film = film(3, 120);
@@ -218,6 +220,7 @@ class RecordServiceTest {
         db.setRoomId(1);
         db.setFilmId(3);
         db.setPrice("40.00");
+        when(recordMapper.selectByIdForUpdate(5)).thenReturn(db);
         when(recordMapper.selectById(5)).thenReturn(db);
 
         Film film = film(3, 120);
@@ -240,7 +243,7 @@ class RecordServiceTest {
         Record db = record(futureStart());
         db.setId(5);
         db.setCinemaId(7);
-        when(recordMapper.selectById(5)).thenReturn(db);
+        when(recordMapper.selectByIdForUpdate(5)).thenReturn(db);
 
         assertThatThrownBy(() -> recordService.updateScoped(db, RoleEnum.CINEMA.name(), 8))
                 .isInstanceOfSatisfying(CustomException.class,

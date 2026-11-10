@@ -240,7 +240,10 @@ public class RecordService extends BaseService<Record> {
     /** 编辑排片：先校验归属，再按局部更新口径补全缺省字段，最后校验影厅归属与排期 */
     @Transactional(rollbackFor = Exception.class)
     public void updateScoped(Record recordItem, String role, Integer userId) {
-        Record dbRecord = selectById(recordItem.getId());
+        // 先对场次行加排他锁：与下单路径的 FOR SHARE 互斥。
+        // 若不锁，"检查无占用 → 改影厅 → 删旧座位 → 重建"期间可能插进一笔下单，
+        // 下单锁住的旧座位随后被删除，订单落成但对应库存行消失。
+        Record dbRecord = recordMapper.selectByIdForUpdate(recordItem.getId());
         ensureRecordAccess(dbRecord, role, userId);
         if (RoleEnum.CINEMA.name().equals(role)) {
             recordItem.setCinemaId(userId);

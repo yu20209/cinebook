@@ -144,7 +144,7 @@ class OrderIdempotencyTest {
      */
     @Test
     void concurrentDuplicateReleasesSeatsAndReturnsOriginalOrder() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         // 第一次（预查）没有，第二次（唯一键冲突后）能读到对手提交的订单
         when(idempotencyService.findByUserAndRequestId(8, "req-4"))
                 .thenReturn(null, existingOrder("1排1座"));
@@ -166,7 +166,7 @@ class OrderIdempotencyTest {
     /** 唯一键冲突但查不到原订单（例如并发删除）：仍按重复下单拒绝，不能静默成功 */
     @Test
     void duplicateWithoutVisibleOriginalOrderIsRejected() {
-        when(recordMapper.selectById(1)).thenReturn(futureRecord());
+        when(recordMapper.selectByIdForShare(1)).thenReturn(futureRecord());
         when(idempotencyService.findByUserAndRequestId(8, "req-5")).thenReturn(null);
         when(orderedMapper.insert(any(Ordered.class)))
                 .thenThrow(new DuplicateKeyException("uk_ordered_user_request"));
