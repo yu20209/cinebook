@@ -1,0 +1,79 @@
+/* 全局重置 + 基础元素样式
+ * 令牌定义在 tokens.scss（:root）；本文件只消费令牌，不定义令牌。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  /* 复用 EP 已产出的字体栈，让自定义元素的文字与 EP 组件文字同源 */
+  font-family: var(--el-font-family);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  color: var(--el-text-color-primary);
+  background-color: var(--el-bg-color-page);
+}
+
+.card {
+  background-color: var(--el-bg-color);
+  padding: var(--space-8);
+  border-radius: var(--el-border-radius-base);
+  box-shadow: var(--el-box-shadow-lighter);
+}
+
+/* 加载转圈的共享关键帧（影院详情的排片占位、购票页的座位图都用到）。
+ * 放在全局而非某个组件的 scoped 块里：scoped 样式会把 @keyframes 名改写为
+ * 带组件哈希的名字，只能被同一个块引用，另一个组件引用它就找不到定义。 */
+@keyframes rotating {
+  from {
+    transform: rotate(0);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 尊重系统「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- el-table 表头（FE-63） ----------
+ * EP 默认两头都不合适：
+ *   1. --el-table-header-text-color 取 --el-text-color-secondary（#909399），
+ *      白底对比度 3.08:1，不达 AA（表头是 14px 常规字，需 4.5:1）；
+ *   2. --el-table-header-bg-color 取 --el-fill-color-blank（#ffffff），
+ *      表头与表体因此只有一条 1px 线，没有底色分界；
+ *   3. 且 .el-table thead th 写死 font-weight: 600 —— 与 tokens.scss「禁用 600」相悖
+ *      （中文字体栈 Microsoft YaHei 只有 400/700，600 会触发伪粗体，比 700 更脏）。
+ *
+ * 覆写变量而不是逐条覆写规则：EP 的表头样式全部读这两个变量，改这里一处生效全站。
+ * 改前已逐个确认没有任何页面自定义过表头背景（深色只用于前台 hero 区，不在表格内）。
+ *
+ * 用 .el-table.el-table 提高特异性：EP 自己的 `.el-table { --el-table-header-bg-color: ... }`
+ * 同样是单类选择器，而 global.css 在 EP 样式**之前**加载 —— 同优先级下后加载者胜，
+ * 只写 `.el-table` 会被 EP 原样覆盖回去（实测：规则确在样式表里，计算值仍是 #ffffff）。
+ */
+.el-table.el-table {
+  --el-table-header-bg-color: var(--el-fill-color-light);
+  --el-table-header-text-color: var(--el-text-color-regular);
+}
+
+/* 字重同理：EP 写的是 `.el-table thead th { font-weight: 600 }`，
+ * 本选择器多一个类压过它（同优先级时会输给后加载的 EP）。 */
+.el-table.el-table thead th {
+  /* 落回 700：中文字体栈没有 600，用 600 会被浏览器合成伪粗体 */
+  font-weight: var(--fw-bold);
+}

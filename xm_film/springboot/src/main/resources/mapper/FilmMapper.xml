@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.FilmMapper">
+
+    <!-- 票房 = 本系统内该影片的累计售票收入（元），由 ordered 实时聚合，不再读 film.box_office 静态列。
+         只统计已支付状态；已取消/已退票不计。状态集合 <include> OrderedMapper.paidOrderStatuses ——
+         全仓只有那一处定义，新增任何"是否已支付"的状态时无需再同步第二个副本。
+         片段里的 status 不带表前缀：本子查询只有 ordered o 一张表，解析到 o.status。 -->
+    <!-- 聚合走 ordered(status, film_id, total) 覆盖索引，避免回表；
+         但它仍然会扫全部已支付订单。订单量继续增长时应改为支付/退票时维护的汇总表，
+         否则每次电影列表/详情都要重算一遍。shortcut: 覆盖索引，订单量大时改汇总表。 -->
+    <sql id="filmRevenueJoin">
+        LEFT JOIN (
+            SELECT o.film_id, SUM(o.total) AS revenue
+            FROM ordered o
+            WHERE <include refid="com.example.springboot.mapper.OrderedMapper.paidOrderStatuses"/>
+            GROUP BY o.film_id
+        ) rev ON rev.film_id = film.id
+    </sql>
+
+    <!-- film 列清单 + 聚合票房（box_office 列保留但已恒为 0，仅此处别名承载聚合值） -->
+    <sql id="filmColumnsWithRevenue">
+        film.id, film.title, film.english, film.start, film.time,
+        film.language, film.content, film.img, film.employee,
+        film.area_id, film.status, film.score, film.actor_id, film.video,
+        COALESCE(rev.revenue, 0) AS box_office
+    </sql>
+
+    <!-- 根据影院ID查询上映电影：影院上映哪些影片由排片(record)派生，新建排片后前台即可见 -->
+    <select id="selectByCinema" resultType="com.example.springboot.entity.Film">
+        SELECT
+        <include refid="filmColumnsWithRevenue"/>,
+        a.title AS areaName,
+        CONCAT(actor.id, ':', actor.actor) as actorInfo
+        FROM film
+        <include refid="filmRevenueJoin"/>
+        LEFT JOIN area a ON film.area_id = a.id
+        LEFT JOIN actor ON film.actor_id = actor.id
+        WHERE EXISTS (SELECT 1 FROM record r WHERE r.film_id = film.id AND r.cinema_id = #{cinemaId})
+        <if test="filmId != null">AND film.id = #{filmId}</if>
+        ORDER BY film.id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Film">
+        SELECT
+            <include refid="filmColumnsWithRevenue"/>,
+            area.title as areaName,
+            CONCAT(actor.id, ':', actor.actor) as actorInfo
+        FROM film
+                 <include refid="filmRevenueJoin"/>
+                 LEFT JOIN area ON film.area_id = area.id
+                 LEFT JOIN actor ON film.actor_id = actor.id
+        WHERE film.id = #{id}
+    </select>
+
+    <!-- 删除守卫的串行化入口：删除前先锁影片行，与 RecordService 写入排片时
+         锁影厅行的口径一致 —— 都先锁被引用的父行，再数/写子表。
+         不加锁时，「数到 0 个排片 → DELETE」之间可以插进一场新排片，
+         DELETE 撞外键 RESTRICT，管理员拿到的是通用提示而非「已有 N 个排片」。 -->
+    <select id="selectByIdForUpdate" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Film">
+        SELECT * FROM film WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <select id="selectAll" resultType="com.example.springboot.entity.Film">
+        SELECT
+        <include refid="filmColumnsWithRevenue"/>,
+        area.title as areaName,
+        CONCAT(actor.id, ':', actor.actor) as actorInfo
+        FROM film
+        <include refid="filmRevenueJoin"/>
+        LEFT JOIN area ON film.area_id = area.id
+        LEFT JOIN actor ON film.actor_id = actor.id
+        <where>
+            <if test="title != null and title != ''">AND film.title LIKE CONCAT('%', #{title}, '%')</if>
+            <if test="typeId != null">AND EXISTS (SELECT 1 FROM film_type ft WHERE ft.film_id = film.id AND ft.type_id = #{typeId})</if>
+            <!-- 年份用范围而不是 LIKE '%2026%'：后者对 date 列必然全表扫，且用不上 idx_start -->
+            <if test="year != null and year != ''">
+                AND film.start &gt;= CONCAT(#{year}, '-01-01')
+                AND film.start &lt; DATE_ADD(CONCAT(#{year}, '-01-01'), INTERVAL 1 YEAR)
+            </if>
+            <if test="areaId != null">AND film.area_id = #{areaId}</if>
+            <if test="status != null and status != ''">AND film.status = #{status}</if>
+            <if test="actorId != null">AND film.actor_id = #{actorId}</if>
+        </where>
+        <!-- 有预告片的优先，其余按新到旧 -->
+        ORDER BY (film.video IS NULL OR film.video = '') ASC, id DESC
+    </select>
+
+    <!-- 补预告片：只回填 video 为空的行。不要复用 selectAll —— 那条带票房聚合与
+         area/actor JOIN，为了几行的片名却要聚合全表。 -->
+    <select id="selectMissingVideo" resultType="com.example.springboot.entity.Film">
+        SELECT id, title, english, start, video
+        FROM film
+        WHERE video IS NULL OR video = ''
+        ORDER BY id
+    </select>
+
+    <!-- 下拉选项：后台两个下拉原先拉 GET /films 全表（含 content 长文本），实测 42,681B → 2,379B。
+         不要复用 selectAll —— 它带票房聚合与 area/actor JOIN，为了 id+标题不值当。 -->
+    <select id="selectOptions" resultType="com.example.springboot.entity.Film">
+        SELECT id, title FROM film ORDER BY id DESC
+    </select>
+
+    <!-- 与其它 film 查询共用票房口径：若这里退回 film.box_office，同一部片会出现
+         "搜索结果里票房 0、详情页里是真实值" 的分叉 -->
+    <select id="selectByTitle" resultType="com.example.springboot.entity.Film">
+        SELECT
+            <include refid="filmColumnsWithRevenue"/>
+        FROM film
+        <include refid="filmRevenueJoin"/>
+        WHERE film.title LIKE CONCAT('%', #{title}, '%')
+    </select>
+
+    <!-- 票房榜：按聚合出来的累计售票收入倒序。只上榜有实际售票的影片 —— 无订单的影片不占榜位，
+         否则榜单会被一串 0 元占满（旧实现读静态列，无 WHERE，所有影片都会出现在榜尾）。 -->
+    <select id="selectBoxOfficeTop" resultType="com.example.springboot.entity.Film">
+        SELECT
+            <include refid="filmColumnsWithRevenue"/>,
+            area.title as areaName,
+            CONCAT(actor.id, ':', actor.actor) as actorInfo
+        FROM film
+        <include refid="filmRevenueJoin"/>
+        LEFT JOIN area ON film.area_id = area.id
+        LEFT JOIN actor ON film.actor_id = actor.id
+        WHERE rev.revenue > 0
+        ORDER BY rev.revenue DESC
+        LIMIT #{topNum}
+    </select>
+
+    <!-- 大盘统计：影片类型分布（由 film_type 关联实时计数） -->
+    <select id="countGroupByType" resultType="com.example.springboot.dto.response.NameValueView">
+        SELECT t.title AS name, COUNT(*) AS value
+        FROM film_type ft
+        INNER JOIN type t ON ft.type_id = t.id
+        GROUP BY t.id, t.title
+        ORDER BY value DESC
+    </select>
+
+    <!-- 与其它 film 查询共用列清单与票房口径：若这里退回 film.*，本接口下发的是
+         film.box_office 静态列（恒为 0），与详情/列表接口的聚合票房分叉 ——
+         同一个 FilmView.boxOffice 在两个接口下含义不同。 -->
+    <select id="selectMarkTop" resultType="com.example.springboot.entity.Film">
+        SELECT
+        <include refid="filmColumnsWithRevenue"/>,
+        area.title as areaName,
+        CONCAT(actor.id, ':', actor.actor) as actorInfo
+        FROM film
+        <include refid="filmRevenueJoin"/>
+        LEFT JOIN area ON film.area_id = area.id
+        LEFT JOIN actor ON film.actor_id = actor.id
+        <!-- 必须"有真实评价"才上榜，与票房榜的 WHERE rev.revenue > 0 同构；
+             film.score IS NOT NULL 是第二层保险 —— 该列只由 recalculateScore 写，无评价时为 NULL -->
+        WHERE film.score IS NOT NULL
+          AND EXISTS (SELECT 1 FROM mark m WHERE m.film_id = film.id)
+        ORDER BY film.score DESC
+        LIMIT #{topNum}
+    </select>
+
+    <!-- 影片评分 = 该影片评价均分。没有任何评价时写 NULL（AVG 空集即 NULL）——
+         film.score 是纯派生列，本语句是它唯一的写者；种子里不再预置任何分数 -->
+    <update id="recalculateScore">
+        UPDATE film f
+        SET f.score = (SELECT ROUND(AVG(m.score), 1) FROM mark m WHERE m.film_id = f.id)
+        WHERE f.id = #{filmId}
+    </update>
+
+    <insert id="insert" parameterType="com.example.springboot.entity.Film" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO film
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="title != null">title,</if>
+            <if test="content != null">content,</if>
+            <if test="time != null">time,</if>
+            <if test="english != null">english,</if>
+            <if test="start != null">start,</if>
+            <if test="language != null">language,</if>
+            <if test="img != null">img,</if>
+            <if test="employee != null">employee,</if>
+            <if test="areaId != null">area_id,</if>
+            <if test="status != null">status,</if>
+            <if test="boxOffice != null">box_office,</if>
+            <if test="video != null">video,</if>
+            <if test="actorId != null">actor_id,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="title != null">#{title},</if>
+            <if test="content != null">#{content},</if>
+            <if test="time != null">#{time},</if>
+            <if test="english != null">#{english},</if>
+            <if test="start != null">#{start},</if>
+            <if test="language != null">#{language},</if>
+            <if test="img != null">#{img},</if>
+            <if test="employee != null">#{employee},</if>
+            <if test="areaId != null">#{areaId},</if>
+            <if test="status != null">#{status},</if>
+            <if test="boxOffice != null">#{boxOffice},</if>
+            <if test="video != null">#{video},</if>
+            <if test="actorId != null">#{actorId},</if>
+        </trim>
+    </insert>
+
+    <update id="updateById" parameterType="com.example.springboot.entity.Film">
+        UPDATE film
+        <set>
+            <if test="title != null">title = #{title},</if>
+            <if test="content != null">content = #{content},</if>
+            <if test="time != null">time = #{time},</if>
+            <if test="english != null">english = #{english},</if>
+            <if test="start != null">start = #{start},</if>
+            <if test="language != null">language = #{language},</if>
+            <if test="img != null">img = #{img},</if>
+            <if test="employee != null">employee = #{employee},</if>
+            <if test="areaId != null">area_id = #{areaId},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="boxOffice != null">box_office = #{boxOffice},</if>
+            <if test="video != null">video = #{video},</if>
+            <if test="actorId != null">actor_id = #{actorId},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <delete id="deleteById" parameterType="java.lang.Integer">
+        DELETE FROM film WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM film WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <select id="selectFilmTypeJoin" resultType="com.example.springboot.dto.response.FilmTypeJoinView">
+        SELECT ft.film_id, ft.type_id, t.title AS type_title
+        FROM film_type ft
+        INNER JOIN type t ON ft.type_id = t.id
+        WHERE ft.film_id IN
+        <foreach collection="list" item="filmId" open="(" separator="," close=")">
+            #{filmId}
+        </foreach>
+    </select>
+
+    <insert id="insertFilmTypes">
+        INSERT INTO film_type (film_id, type_id) VALUES
+        <foreach collection="typeIds" item="typeId" separator=",">
+            (#{filmId}, #{typeId})
+        </foreach>
+    </insert>
+
+    <delete id="deleteFilmTypesByFilmId">
+        DELETE FROM film_type WHERE film_id = #{filmId}
+    </delete>
+
+</mapper>

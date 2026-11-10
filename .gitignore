@@ -1,0 +1,95 @@
+# ============================================================
+# 影院购票管理系统 — .gitignore
+# ============================================================
+
+# === Java / Maven ===
+target/
+springboot-jar/
+*.class
+# 拦手工丢进源码树或下载来的 jar；构建产物本已在 target/ 覆盖
+*.jar
+*.war
+# 例外：wrapper jar 是构建工具本体，必须入库 —— 被静默忽略会让全新克隆跑不起 ./mvnw、./gradlew
+!**/.mvn/wrapper/*.jar
+!**/gradle/wrapper/*.jar
+
+# === Node.js ===
+node_modules/
+dist/
+# 根目录没有 package.json，任何根级锁文件都是误在仓库根跑 npm 的产物（真正的锁文件在 xm_film/vue/）
+/package-lock.json
+/yarn.lock
+/pnpm-lock.yaml
+
+# === Python（验证脚本的字节码缓存）===
+__pycache__/
+*.pyc
+
+# === 日志 ===
+*.log
+
+# === IDE ===
+.idea/
+*.iml
+.vscode/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === 项目本地文件 ===
+.env
+.env.*
+# 例外只有 `.env.development`（本地开发共享默认值），只放非密钥内容（本地地址、公开开关）
+# `.env` 刻意不入库：它是机器本地文件，各机各有各的值
+# 密钥与机器专属覆盖写 .env.local / .env.*.local —— 已被上面的 .env.* 覆盖，无需再加规则
+!.env.development
+# 例外：后端密钥模板要入库，真实 `.env` 仍然忽略
+!.env.example
+/claude.log
+scripts/start-claude.bat
+/start_claude.bat
+/SonarLint.txt
+backend.log
+frontend.log
+
+# === 数据库备份 ===
+*backup*.sql
+*.sql.bak
+# 一次性数据补齐脚本按规范不入库（见 docs/engineering-rules.md §5）。
+# 例外：demo-data.sql 是演示环境入口；src/test/resources/db/ 下的结构快照是对照源。
+*.sql
+!**/demo-data.sql
+!**/src/test/resources/db/*.sql
+# 例外：数据库迁移脚本是 schema 演进的唯一出处，必须入库
+!**/src/main/resources/db/migration/*.sql
+
+# === 会话临时产物（不入库）===
+/_docx_extracted/
+/_docx_extract.zip
+/_doc_content.txt
+/_extract.ps1
+/_read_doc.py
+
+# === Claude ===
+.claude/
+
+# === Local agent/runtime artifacts ===
+AGENTS.md
+
+# === 其他 ===
+login.json
+JIANLI.txt
+
+# === 本地素材（不入库）===
+# picture/ 与 video/ 为本地素材源，不入库；video/ 内容与 picture/ 完全重复。
+/picture/
+/video/
+
+# === Playwright MCP artifacts ===
+.playwright-mcp/
+
+# === Playwright（e2e）产物 ===
+test-results/
+playwright-report/
+blob-report/

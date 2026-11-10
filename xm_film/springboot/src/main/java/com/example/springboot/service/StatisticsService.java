@@ -1,0 +1,141 @@
+package com.example.springboot.service;
+
+import com.example.springboot.dto.response.DailyRevenueView;
+import com.example.springboot.dto.response.NameValueView;
+import com.example.springboot.dto.response.TodayRevenueView;
+import com.example.springboot.mapper.CinemaMapper;
+import com.example.springboot.mapper.FilmMapper;
+import com.example.springboot.mapper.OrderedMapper;
+import com.example.springboot.mapper.UserMapper;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 后台可视化大盘的统计口径：全部由数据库实时聚合，不落快照、不缓存、不造数。
+ * 无数据的维度返回空列表，由前端渲染「暂无数据」占位。
+ */
+@Service
+@Transactional(readOnly = true)
+public class StatisticsService {
+
+    /**
+     * 趋势窗口：不含今天，只覆盖完整日。今天只过了一半，把它画进折线会让曲线
+     * 在每个上午都呈现"断崖下跌"，读者会把半天数据误读成经营恶化。
+     * 副作用是趋势末点正好是昨天，KPI 的环比可以直接从它推出来，后端不必另算。
+     */
+    static final int TREND_DAYS = 7;
+
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final String UNAUDITED = "未审核";
+    private static final String PENDING_PICKUP = "待取票";
+
+    private final CinemaMapper cinemaMapper;
+
+    private final FilmMapper filmMapper;
+
+    private final OrderedMapper orderedMapper;
+
+    private final UserMapper userMapper;
+
+    public StatisticsService(CinemaMapper cinemaMapper, FilmMapper filmMapper,
+                             OrderedMapper orderedMapper, UserMapper userMapper) {
+        this.cinemaMapper = cinemaMapper;
+        this.filmMapper = filmMapper;
+        this.orderedMapper = orderedMapper;
+        this.userMapper = userMapper;
+    }
+
+    public Map<String, Object> overview() {
+        List<NameValueView> cinemaStatus = cinemaMapper.countGroupByStatus();
+        TodayRevenueView today = orderedMapper.selectTodayPaidRevenue();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("cinemaStatus", cinemaStatus);
+        result.put("filmType", filmMapper.countGroupByType());
+        // 三组分布同构：都是「维度值 → 计数」的原样分组，后端不派生、不排序、
+        // 不补零，给什么维度值就是什么，由前端按自己的枚举补全并着色。
+        List<NameValueView> orderStatus = orderedMapper.countGroupByStatus();
+        result.put("orderStatus", orderStatus);
+        // 统计时刻取自今日票房那次查询：同一次观测，页面上只有一个「今天」
+        result.put("updatedAt", today.getUpdatedAt());
+        result.put("summary", summary(today, cinemaStatus, orderStatus));
+        result.put("revenueTrend", revenueTrend(TREND_DAYS));
+        return result;
+    }
+
+    /**
+     * 影院与订单的汇总数都从本轮已取回的分组结果派生 —— 不再对同一张表发第二次 COUNT。
+     * 重复取数会在两次数之间产生窗口，让同一屏的 KPI 与图表对不上。
+     */
+    private Map<String, Object> summary(TodayRevenueView today, List<NameValueView> cinemaStatus,
+                                        List<NameValueView> orderStatus) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("todayRevenue", today.getTotal());
+        summary.put("todayOrders", orderedMapper.countTodayPaidOrders());
+        summary.put("totalUsers", userMapper.countAll());
+        summary.put("totalCinemas", sumValues(cinemaStatus));
+        summary.put("pendingCinemas", countOf(cinemaStatus, UNAUDITED));
+        summary.put("pendingPickupOrders", countOf(orderStatus, PENDING_PICKUP));
+        return summary;
+    }
+
+    /** 近 days 个完整日（截至昨日）的逐日票房与订单数 */
+    List<Map<String, Object>> revenueTrend(int days) {
+        return revenueTrend(LocalDate.now(ZoneId.systemDefault()), days);
+    }
+
+    /**
+     * 抽出 endExclusive 重载是为了可测：让用例钉死日期，不受运行时刻跨零点影响。
+     */
+    List<Map<String, Object>> revenueTrend(LocalDate endExclusive, int days) {
+        LocalDate start = endExclusive.minusDays(days);
+
+        Map<String, DailyRevenueView> byDate = new LinkedHashMap<>();
+        for (DailyRevenueView row : orderedMapper.selectPaidRevenueByDay(start, endExclusive)) {
+            byDate.put(row.getDate(), row);
+        }
+
+        List<Map<String, Object>> trend = new ArrayList<>(days);
+        for (int i = 0; i < days; i++) {
+            String date = start.plusDays(i).format(DAY);
+            DailyRevenueView row = byDate.get(date);
+
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("date", date);
+            point.put("revenue", row == null ? BigDecimal.ZERO : row.getRevenue());
+            // 补零日必须是 Integer 0 而不是 Long 0：(Object) 强转挡掉「int 与 Long 三元」的
+            // 数值提升，否则补零的 0 会被提升成 Long，orders 的类型随「当天有没有销售」而变。
+            point.put("orders", row == null ? (Object) 0 : row.getOrders());
+            trend.add(point);
+        }
+        return trend;
+    }
+
+    private static long sumValues(List<NameValueView> rows) {
+        long total = 0L;
+        for (NameValueView row : rows) {
+            if (row.getValue() != null) {
+                total += row.getValue();
+            }
+        }
+        return total;
+    }
+
+    private static long countOf(List<NameValueView> rows, String name) {
+        for (NameValueView row : rows) {
+            if (name.equals(row.getName())) {
+                return row.getValue() == null ? 0L : row.getValue();
+            }
+        }
+        return 0L;
+    }
+}

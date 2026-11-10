@@ -1,0 +1,368 @@
+/* 管理端页面的共用骨架样式
+ *
+ * 与 front-pages.scss 对称：前台是「列表页 / 筛选页」共用一套骨架（挂在 .front-content 下），
+ * 管理端是「表格 CRUD 页 / 大盘」共用一套（挂在本文件）。两边各自是所在端的唯一骨架层。
+ *
+ * 骨架分两组：
+ *   · .page-head / .list-toolbar / .table-card / .table-foot —— 页面级（标题带 + 工具条 + 表格卡）
+ *   · .section-head —— 页内区块标题（大盘的两个区块），几何与前台同名类一致
+ *
+ * 全部挂在 .manage-container 下 —— 这些页面都渲染在 Manage.vue / Back.vue 的外壳内，
+ * 加这一层即把作用域限制在管理端，既不会外泄到前台，也无需给每个类名加前缀。
+ * 由 main.js 引入一次。 */
+
+.manage-container {
+  /* 页面里成叠的卡片（搜索区 / 表格区 / 分页区 / 弹窗） */
+  .page-card {
+    margin-bottom: var(--space-8);
+  }
+
+  /* 列表页顶部的搜索输入框 */
+  .search-input {
+    width: 300px;
+    margin-right: var(--space-12);
+  }
+
+  /* 表格行内的操作按钮（编辑 / 删除）。字号即图标尺寸（EP 的 .el-icon 是 font-size: inherit，
+     内嵌 svg 是 1em），故取「常规功能」档 16px。原值 --fs-lg（18px）不在
+     12 / 16 / 20 / 24 四档内；"便于点击"由 EP link 按钮自带的内边距承担。 */
+  .row-action {
+    font-size: var(--fs-md);
+  }
+
+  /* 表格单元格里的方形缩略图（影片海报、视频封面） */
+  .cell-thumb {
+    width: 36px;
+    height: 36px;
+    margin-top: var(--space-8);
+    border-radius: var(--el-border-radius-base);
+    object-fit: cover;
+  }
+
+  /* 表格单元格里的圆形头像 */
+  .cell-avatar {
+    width: 40px;
+    height: 40px;
+    margin-top: var(--space-4);
+    border-radius: var(--el-border-radius-circle);
+    object-fit: cover;
+  }
+
+  /* el-image 破图兜底图（#error 插槽内）：外层 .cell-avatar / .cell-thumb 已定死尺寸并
+     overflow: hidden，这里铺满即可。刻意不吃它们的 margin-top —— 那是给外层在表格单元格里
+     定位用的，内层再吃一次会把图挤出圆框。 */
+  .cell-fallback {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* 弹窗内表单：右侧留出滚动条与校验提示的空间 */
+  .dialog-form {
+    padding-top: var(--space-20);
+    padding-right: var(--space-48);
+  }
+
+  /* 表单控件的固定宽度档位 */
+  .field-full {
+    width: 100%;
+  }
+
+  .field-md {
+    width: 220px;
+  }
+
+  .field-lg {
+    width: 350px;
+  }
+
+  /* 个人资料 / 修改密码页：居中卡片 */
+  .profile-wrapper {
+    display: flex;
+    justify-content: center;
+    min-height: 50vh;
+    padding: var(--space-20);
+  }
+
+  .profile-card {
+    width: 50%;
+    max-width: 500px;
+    padding: var(--space-40) var(--space-20);
+  }
+
+  .form-actions {
+    text-align: center;
+  }
+
+  .submit-button {
+    padding: var(--space-20) var(--space-32);
+  }
+
+  /* 表格里成串的 el-tag 之间的间隙 */
+  .tag-gap {
+    margin-right: var(--space-4);
+    margin-bottom: var(--space-4);
+  }
+
+  /* 单元格单行截断基类（宽度档见下）。此前在 manage/Film.vue、back/Film.vue
+     两处各写一份逐字相同的副本，此处收敛为一处。 */
+  .line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* 表格单元格的文字截断宽度（按内容角色分档，避免写死 px） */
+  .line--content {
+    width: 80px;
+  }
+
+  .line--employee {
+    width: 100px;
+  }
+
+  /* 页面根堆叠。模块间距的唯一出处（管理端模块间距 16 / 24px）——
+     此前靠每页各写一次 `margin-bottom: 8px` / `.mb-2` 工具类。 */
+  .crud-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-16);
+  }
+
+  /* 标题带：页面级 .page-head 与页内区块级 .section-head 共用同一套几何 ——
+     下边缘一条淡分隔线压一段品牌短线，与前台 .section-head 是同一套装饰语言，
+     两端读起来是一家。两者只差标题的字号与颜色，故几何合成一条选择器，
+     免得同一组声明在本文件里写两遍。
+     短线是装饰元素（不承载文字），用 --color-brand（后台即 #165DFF，仅需 ≥3:1）。 */
+  .page-head,
+  .section-head {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-12);
+    padding-bottom: var(--space-8);
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .page-head::after,
+  .section-head::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: var(--space-40);
+    height: 2px;
+    background-color: var(--color-brand);
+  }
+
+  /* 标题含中文，字重只能用 400 / 700。页面级取「页面主标题」档，
+     用中性色 —— 品牌感已由短线承载，管理端密度下标题保持克制。 */
+  .page-head__title {
+    margin: 0;
+    font-size: var(--fs-2xl);
+    font-weight: var(--fw-bold);
+    color: var(--el-text-color-primary);
+  }
+
+  .page-head__action {
+    margin-left: auto;
+  }
+
+  /* 页内区块标题（大盘的两个区块）取「区块大标题」档，与前台同名类同色。
+     这里没有「全部 ›」消费者，故不带 __more 档（原则七：只保留有消费者的刻度）。 */
+  .section-head__title {
+    margin: 0;
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-bold);
+    color: var(--el-color-primary);
+  }
+
+  /* 列表页工具条：筛选区与操作区合并成一张卡（此前是两张）。
+     筛选区用 gap 排布，故把 .search-input 自带的 margin-right 归零，避免间距翻倍。 */
+  .list-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-12);
+    padding: var(--space-12) var(--space-16);
+  }
+
+  .list-toolbar__filters {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-12);
+    min-width: 0;
+  }
+
+  .list-toolbar__filters .search-input {
+    margin-right: 0;
+  }
+
+  .list-toolbar__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+    margin-left: auto;
+  }
+
+  /* 「已选 N 项」随选中数出现，用 aria-live 把变化播报给读屏。
+     文字用 --el-text-color-regular（6.11:1）而非 secondary —— 13px 属正文尺寸，
+     secondary 对比度 3.08:1，只可用于 ≥18px 或纯装饰。 */
+  .selection-count {
+    font-size: var(--fs-sm);
+    color: var(--el-text-color-regular);
+    white-space: nowrap;
+  }
+
+  /* 表格容器：去掉 .card 的内边距让表格贴边，由 4px 圆角裁切边角。
+     注意不要把 overflow: hidden 加在 EP 的 .el-table__body-wrapper 上 —— 那是它的
+     横向滚动容器，裁掉就等于禁掉宽表（购票订单 13 列）的横向滚动。 */
+  .table-card {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  /* 卡内分页条：与表格之间一条分隔线 */
+  .table-foot {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: var(--space-12) var(--space-16);
+    border-top: 1px solid var(--el-border-color-lighter);
+  }
+
+  /* 表格空态 / 失败态占位（两者文案不同、必须区分）。
+     挂 el-table 的 #empty 槽 —— EP 的默认空文案分不出「库里确实没有」与「请求失败」。 */
+  .empty-hint {
+    padding: var(--space-40) 0;
+    font-size: var(--fs-base);
+    color: var(--el-text-color-regular);
+    text-align: center;
+  }
+
+  /* 一格放多个操作按钮：一律从同一左边缘起排。
+     EP 的按钮间距是 `.el-button + .el-button { margin-left: 12px }`，列宽不够折行时
+     第二个按钮会被这 12px 右推、两行左右错开。flex + gap 让间距与
+     「是否折行」解耦。 */
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-8);
+
+    .el-button + .el-button {
+      margin-left: 0;
+    }
+  }
+
+  /* ===== TMDB 导入弹窗 =====
+     搜索结果为一行一部片：海报缩略图 + 片名/年份 + 英文名 + 两行简介，整行可点选。
+     用原生 <button> 而不是 role=button 的 div：键盘可达性由元素本身保证，
+     不需要 tabindex / keyup 补丁。按钮默认的边框、底色、字体与文字对齐在这里清掉。 */
+  .import-results {
+    max-height: 380px;
+    margin-top: var(--space-16);
+    overflow-y: auto;
+  }
+
+  .import-item {
+    display: flex;
+    width: 100%;
+    gap: var(--space-12);
+    padding: var(--space-12);
+    border: 1px solid var(--el-border-color-lighter);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    border-radius: var(--el-border-radius-base);
+    cursor: pointer;
+    transition: border-color 150ms ease-in-out, background-color 150ms ease-in-out;
+
+    & + .import-item {
+      margin-top: var(--space-8);
+    }
+
+    &:hover {
+      background-color: var(--el-fill-color-light);
+    }
+
+    /* 选中态：品牌色描边 + 淡底，与表格选中行同一套语汇 */
+    &--active {
+      border-color: var(--color-brand);
+      background-color: var(--el-color-primary-light-9);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-brand);
+      outline-offset: 2px;
+    }
+  }
+
+  .import-item__poster {
+    flex: 0 0 auto;
+    width: 60px;
+    aspect-ratio: 2 / 3;
+    border-radius: var(--el-border-radius-small);
+    background-color: var(--el-fill-color-light);
+    object-fit: cover;
+
+    /* 无海报占位：保持同样几何，避免行高参差 */
+    &--empty {
+      background-color: var(--el-fill-color);
+    }
+  }
+
+  .import-item__body {
+    /* 不设 min-width 会让子元素的省略号失效，长片名把行撑破 */
+    display: block;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .import-item__title {
+    display: block;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-bold);
+    color: var(--el-text-color-primary);
+  }
+
+  .import-item__year {
+    font-weight: var(--fw-regular);
+    color: var(--el-text-color-secondary);
+  }
+
+  .import-item__original {
+    display: block;
+    margin-top: var(--space-4);
+    font-size: var(--fs-xs);
+    color: var(--el-text-color-secondary);
+  }
+
+  /* 简介只给两行：挑片时够用，完整简介回填后在表单里看 */
+  .import-item__overview {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-top: var(--space-4);
+    font-size: var(--fs-xs);
+    line-height: var(--lh-base);
+    color: var(--el-text-color-regular);
+  }
+
+  .import-hint {
+    margin-top: var(--space-8);
+    font-size: var(--fs-xs);
+    color: var(--el-text-color-secondary);
+  }
+
+  /* 补预告片结果弹窗里的说明行 */
+  .backfill-summary {
+    margin: 0 0 var(--space-12);
+    font-size: var(--fs-sm);
+    color: var(--el-text-color-regular);
+  }
+}

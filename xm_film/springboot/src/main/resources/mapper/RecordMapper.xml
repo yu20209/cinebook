@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.RecordMapper">
+
+    <!-- 列表与详情的公共投影 / 关联：两处逐字相同，抽成片段，避免改一处漏一处导致
+         列表与详情对同一条排片给出不同展示（如掉了一个关联列）。 -->
+    <sql id="recordColumns">
+        record.*,
+        cinema.name as cinemaName,
+        room.name as roomName,
+        room.seat_rows as roomSeatRows,
+        room.seat_cols as roomSeatCols
+    </sql>
+
+    <sql id="recordJoins">
+        LEFT JOIN cinema ON record.cinema_id = cinema.id
+        LEFT JOIN room ON record.room_id = room.id
+    </sql>
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultType="com.example.springboot.entity.Record">
+        SELECT
+        <include refid="recordColumns"/>
+        FROM record
+        <include refid="recordJoins"/>
+        <where>
+            <if test="title != null and title != ''">AND record.title LIKE CONCAT('%', #{title}, '%')</if>
+            <!-- 日期用半开区间而不是 LIKE '%2026-10-25%'：datetime 上的 LIKE 会阻止 idx_record_start -->
+            <if test="start != null and start != ''">
+                AND record.start &gt;= #{start}
+                AND record.start &lt; DATE_ADD(#{start}, INTERVAL 1 DAY)
+            </if>
+            <if test="status != null and status != ''">AND record.status = #{status}</if>
+            <if test="cinemaId != null">AND record.cinema_id = #{cinemaId} </if>
+            <if test="roomId != null">AND record.room_id = #{roomId} </if>
+            <if test="filmId != null">AND record.film_id = #{filmId} </if>
+        </where>
+        <!-- 未来场次在前且按时间升序，历史场次排在后面 -->
+        ORDER BY (record.start &gt;= NOW()) DESC, record.start ASC, record.id ASC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Record">
+        SELECT
+        <include refid="recordColumns"/>
+        FROM record
+        <include refid="recordJoins"/>
+        WHERE record.id = #{id}
+    </select>
+
+    <select id="selectByIdForUpdate" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Record">
+        SELECT * FROM record WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <!-- 同一影厅时段冲突检测（已停售的场次不占用影厅）。
+         **必须 FOR UPDATE，不能去掉**：调用方在 REPEATABLE-READ 下先锁 room 行再调本语句，
+         而普通 SELECT 是一致性非锁定读，读的是事务开始时的快照 —— 等锁期间对方刚提交的
+         排片它看不见，于是两个并发请求都能读到 0、双双插入（BL-01 实测复现 2 行）。
+         锁定读走的是当前读，拿到的永远是最新已提交版本。
+         写法为什么是子查询加 FOR UPDATE 而不是 SELECT COUNT(*) ... FOR UPDATE：
+         后者在 MySQL 里直接报语法错（FOR UPDATE 不能用于聚合）。子查询锁定行、
+         外层 COUNT 计数，效果等价且合法。 -->
+    <select id="countRoomOverlap" resultType="int">
+        SELECT COUNT(*) FROM (
+            SELECT r.id FROM record r
+            LEFT JOIN film f ON r.film_id = f.id
+            WHERE r.room_id = #{roomId}
+              AND COALESCE(r.status, '正常') != '停售'
+              AND #{start} &lt; DATE_ADD(r.start, INTERVAL GREATEST(COALESCE(f.time, 120), 1) MINUTE)
+              AND #{end} &gt; r.start
+            <if test="id != null">AND r.id != #{id}</if>
+            FOR UPDATE
+        ) locked_rows
+    </select>
+
+    <!-- 删除守卫引用计数：被排片引用的影片/影院/影厅不允许物理删除 -->
+    <select id="countByFilmId" resultType="int">
+        SELECT COUNT(*) FROM record WHERE film_id = #{filmId}
+    </select>
+
+    <select id="countByCinemaId" resultType="int">
+        SELECT COUNT(*) FROM record WHERE cinema_id = #{cinemaId}
+    </select>
+
+    <select id="countByRoomId" resultType="int">
+        SELECT COUNT(*) FROM record WHERE room_id = #{roomId}
+    </select>
+
+    <!-- 插入操作 -->
+    <insert id="insert" parameterType="com.example.springboot.entity.Record"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO record
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="cinemaId != null">cinema_id,</if>
+            <if test="roomId != null">room_id,</if>
+            <if test="filmId != null">film_id,</if>
+            <if test="title != null">title,</if>
+            <if test="start != null">start,</if>
+            <if test="price != null">price,</if>
+            <if test="status != null">status,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="cinemaId != null">#{cinemaId},</if>
+            <if test="roomId != null">#{roomId},</if>
+            <if test="filmId != null">#{filmId},</if>
+            <if test="title != null">#{title},</if>
+            <if test="start != null">#{start},</if>
+            <if test="price != null">#{price},</if>
+            <if test="status != null">#{status},</if>
+        </trim>
+    </insert>
+
+    <!-- 更新操作 -->
+    <update id="updateById" parameterType="com.example.springboot.entity.Record">
+        UPDATE record
+        <set>
+            <if test="cinemaId != null">cinema_id = #{cinemaId},</if>
+            <if test="roomId != null">room_id = #{roomId},</if>
+            <if test="filmId != null">film_id = #{filmId},</if>
+            <if test="title != null">title = #{title},</if>
+            <if test="start != null">start = #{start},</if>
+            <if test="price != null">price = #{price},</if>
+            <if test="status != null">status = #{status},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="java.lang.Integer">
+        DELETE FROM record WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM record WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

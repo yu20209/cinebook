@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.ActorMapper">
+
+    <!-- 数据库列 actor 与实体属性 actorName 不同名，需显式映射（其余列走自动映射） -->
+    <resultMap id="ActorMap" type="com.example.springboot.entity.Actor">
+        <id column="id" property="id"/>
+        <result column="actor" property="actorName"/>
+    </resultMap>
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultMap="ActorMap">
+        SELECT * FROM actor
+        <where>
+            <if test="actorName != null">
+                AND actor LIKE CONCAT('%', #{actorName}, '%')
+            </if>
+        </where>
+        ORDER BY id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultMap="ActorMap">
+        SELECT * FROM actor WHERE id = #{id}
+    </select>
+
+    <!-- 插入操作。useGeneratedKeys 是 TMDB 导入的必需项：建完演职人员行要拿回自增 id
+         填进影片表单的 actorId，缺了它 film.actor_id 永远是 null、前台演职人员区永远是空的。
+         注意 actor.film_id 列本语句不写 —— 影片是后保存的，此时还没有 film id。 -->
+    <insert id="insert" parameterType="com.example.springboot.entity.Actor" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO actor
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="title != null">title,</if>
+            <if test="img != null">img,</if>
+            <if test="actorName != null">actor,</if>
+            <if test="figure != null">figure,</if>
+            <if test="picture != null">picture,</if>
+            <if test="grade != null">grade,</if>
+            <if test="video != null">video,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="title != null">#{title},</if>
+            <if test="img != null">#{img},</if>
+            <if test="actorName != null">#{actorName},</if>
+            <if test="figure != null">#{figure},</if>
+            <if test="picture != null">#{picture},</if>
+            <if test="grade != null">#{grade},</if>
+            <if test="video != null">#{video},</if>
+        </trim>
+    </insert>
+
+
+    <!-- 更新操作 -->
+    <update id="updateById" parameterType="com.example.springboot.entity.Actor">
+        UPDATE actor
+        <set>
+            <if test="title != null">title = #{title},</if>
+            <if test="img != null">img = #{img},</if>
+            <if test="actorName != null">actor = #{actorName},</if>
+            <if test="figure != null">figure = #{figure},</if>
+            <if test="picture != null">picture = #{picture},</if>
+            <if test="grade != null">grade = #{grade},</if>
+            <if test="video != null">video = #{video},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="java.lang.Integer">
+        DELETE FROM actor WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM actor WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

@@ -1,0 +1,391 @@
+package com.example.springboot.common.config;
+
+import com.example.springboot.common.JwtUtils;
+import com.example.springboot.common.enums.RoleEnum;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+class AuthInterceptorAccessTest {
+
+    private AuthInterceptor newInterceptor() {
+        // 拦截器改为构造器注入：jwtUtils 给 mock（parseToken 返回 null 即"令牌解析失败"），
+        // objectMapper 用真实实例，回写错误体时不会 NPE。
+        return new AuthInterceptor(mock(JwtUtils.class), new ObjectMapper());
+    }
+
+    /** 直接调包私有的 hasAccess：本测试与 AuthInterceptor 同包，不再用反射 */
+    private boolean hasAccess(AuthInterceptor interceptor, String path, String method, String role) {
+        return interceptor.hasAccess(path, method, role);
+    }
+
+    /** 匿名（无 token）请求是否被放行，覆盖 preHandle 的白名单分支 */
+    private boolean anonymousAllowed(String path, String method) {
+        AuthInterceptor interceptor = newInterceptor();
+        MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        try {
+            return interceptor.preHandle(request, response, new Object());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** 带着无法解析的令牌访问时 preHandle 的结果（模拟令牌过期） */
+    private boolean withBrokenToken(String path, String method) {
+        AuthInterceptor interceptor = newInterceptor();
+        MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+        request.addHeader("Authorization", "Bearer not-a-real-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        try {
+            return interceptor.preHandle(request, response, new Object());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // ========== 经营数据 ==========
+
+    /** 统计驾驶舱只有管理端首页消费；拦截器默认放行非管理员 GET，必须显式进 ADMIN_ONLY。 */
+    @Test
+    void userCannotReachStatisticsDashboard() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/statistics/overview", "GET", RoleEnum.USER.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/statistics/overview", "GET", RoleEnum.ADMIN.name())).isTrue();
+    }
+
+    // ========== Film write protection ==========
+
+    @Test
+    void cinemaCannotWriteFilms() {        assertThat(hasAccess(newInterceptor(), "/api/v1/films", "POST", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void adminCanWriteFilms() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/films", "POST", RoleEnum.ADMIN.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCanReadFilms() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/films", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    // ========== Admin-only resources ==========
+
+    @Test
+    void cinemaCannotAccessAdminPrefix() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/admins", "GET", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void userCannotAccessAdminPrefix() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/admins", "GET", RoleEnum.USER.name())).isFalse();
+    }
+
+    // ========== TMDB 导入：GET 但带副作用，必须 admin-only ==========
+    // /api/v1/tmdb 放在 ADMIN_ONLY_PREFIXES（拦所有方法）而不是 ADMIN_WRITE_PREFIXES
+    // （只拦写方法）。若有人把它挪到后者，下面 user/cinema 两个用例立刻失败 —— 正是要挡的那种放宽。
+
+    @Test
+    void adminCanReachTmdbImport() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb", "GET", RoleEnum.ADMIN.name())).isTrue();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb/movie/550", "GET", RoleEnum.ADMIN.name())).isTrue();
+    }
+
+    @Test
+    void userCannotReachTmdbImportEvenThoughItIsAGet() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb", "GET", RoleEnum.USER.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb/search", "GET", RoleEnum.USER.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb/movie/550", "GET", RoleEnum.USER.name())).isFalse();
+    }
+
+    @Test
+    void cinemaCannotReachTmdbImport() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb/movie/550", "GET", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void anonymousCannotReachTmdbImport() {
+        assertThat(anonymousAllowed("/api/v1/tmdb/search", "GET")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/tmdb/movie/550", "GET")).isFalse();
+    }
+
+    @Test
+    void brokenTokenCannotReachTmdbImport() {
+        assertThat(withBrokenToken("/api/v1/tmdb/movie/550", "GET")).isFalse();
+    }
+
+    // ========== Read-only for non-ADMIN: actors, areas, types, notices, videos ==========
+
+    @Test
+    void cinemaCanReadActors() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/actors", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCannotWriteActors() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/actors", "POST", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void cinemaCanReadAreas() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/areas", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCannotWriteAreas() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/areas", "PUT", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void cinemaCanReadTypes() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/types", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCannotWriteTypes() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/types", "POST", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void cinemaCanReadNotices() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/notices", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCannotWriteNotices() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/notices", "DELETE", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    @Test
+    void cinemaCanReadVideos() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/videos", "GET", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void cinemaCannotWriteVideos() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/videos", "POST", RoleEnum.CINEMA.name())).isFalse();
+    }
+
+    // ========== USER read access ==========
+
+    @Test
+    void userCanReadActors() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/actors", "GET", RoleEnum.USER.name())).isTrue();
+    }
+
+    @Test
+    void userCannotWriteActors() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/actors", "POST", RoleEnum.USER.name())).isFalse();
+    }
+
+    // ========== Order endpoint (service-level auth) ==========
+
+    @Test
+    void interceptorAllowsUserPostOrders() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/orders", "POST", RoleEnum.USER.name())).isTrue();
+    }
+
+    // ========== Anonymous read allowlist (preHandle) ==========
+
+    @Test
+    void anonymousCanReadRecords() {
+        assertThat(anonymousAllowed("/api/v1/records/page", "GET")).isTrue();
+    }
+
+    @Test
+    void anonymousCanReadRecordById() {
+        assertThat(anonymousAllowed("/api/v1/records/1", "GET")).isTrue();
+    }
+
+    @Test
+    void anonymousCannotWriteRecords() {
+        assertThat(anonymousAllowed("/api/v1/records", "POST")).isFalse();
+    }
+
+    @Test
+    void anonymousCannotReadOrders() {
+        assertThat(anonymousAllowed("/api/v1/orders/page", "GET")).isFalse();
+    }
+
+    // ========== Marks: 评价列表公开可读，写操作的角色与归属由 MarkController 校验 ==========
+
+    @Test
+    void anonymousCanReadMarks() {
+        assertThat(anonymousAllowed("/api/v1/marks", "GET")).isTrue();
+    }
+
+    @Test
+    void anonymousCannotWriteMarks() {
+        assertThat(anonymousAllowed("/api/v1/marks", "POST")).isFalse();
+    }
+
+    @Test
+    void interceptorLetsUserReachMarkWriteEndpoint() {
+        // 拦截器只做前缀级判断，「仅 USER 可发表 / 非 ADMIN 只能改删自己的」在控制器内
+        assertThat(hasAccess(newInterceptor(), "/api/v1/marks", "POST", RoleEnum.USER.name())).isTrue();
+    }
+
+    @Test
+    void anonymousCanReadFilmMarks() {
+        // 影片详情页的评价列表是公开内容，liked/mine 由后端按 JWT 计算，匿名恒 false
+        assertThat(anonymousAllowed("/api/v1/marks/by-film", "GET")).isTrue();
+    }
+
+    @Test
+    void anonymousCannotLikeMark() {
+        assertThat(anonymousAllowed("/api/v1/marks/1/like", "PUT")).isFalse();
+    }
+
+    @Test
+    void interceptorLetsCinemaReachLikeEndpoint() {
+        // 点赞的角色门禁（仅 USER）在 MarkController 内，拦截器只做前缀级判断
+        assertThat(hasAccess(newInterceptor(), "/api/v1/marks/1/like", "PUT", RoleEnum.CINEMA.name())).isTrue();
+    }
+
+    @Test
+    void brokenTokenCannotLikeMark() {
+        assertThat(withBrokenToken("/api/v1/marks/1/like", "PUT")).isFalse();
+    }
+
+    // ========== Cinemas: 读公开，写（新增/删除）在 CinemaController 内限管理员 ==========
+
+    @Test
+    void anonymousCanReadCinemas() {
+        assertThat(anonymousAllowed("/api/v1/cinemas/page", "GET")).isTrue();
+    }
+
+    @Test
+    void userCanReadCinemas() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinemas", "GET", RoleEnum.USER.name())).isTrue();
+    }
+
+    // ========== 令牌过期：公开只读资源不应因此变成"必须登录" ==========
+
+    @Test
+    void brokenTokenStillReadsPublicResources() {
+        assertThat(withBrokenToken("/api/v1/marks", "GET")).isTrue();
+        assertThat(withBrokenToken("/api/v1/cinemas/page", "GET")).isTrue();
+        assertThat(withBrokenToken("/api/v1/records/page", "GET")).isTrue();
+    }
+
+    @Test
+    void brokenTokenCannotReadPrivateResources() {
+        assertThat(withBrokenToken("/api/v1/orders/page", "GET")).isFalse();
+        assertThat(withBrokenToken("/api/v1/admins", "GET")).isFalse();
+    }
+
+    @Test
+    void brokenTokenCannotWritePublicResources() {
+        assertThat(withBrokenToken("/api/v1/marks", "POST")).isFalse();
+        assertThat(withBrokenToken("/api/v1/films", "POST")).isFalse();
+    }
+
+    // ========== 匿名写白名单：取票大厅核销是本仓库唯一的匿名写入口 ==========
+    // 自助机不认识用户、只认取票码，所以核销必须免登录。放行面积被三处收窄，
+    // 下面四个用例各钉住一处，任何一处放宽都会在这里失败。
+
+    @Test
+    void anonymousCanRedeemTicketCode() {
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem", "POST")).isTrue();
+    }
+
+    /** 精确匹配而非前缀：子路径不得被连带放行 */
+    @Test
+    void anonymousCannotReachSubPathOfRedeem() {
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem/extra", "POST")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem-all", "POST")).isFalse();
+    }
+
+    /** 只放行 POST：同路径的其它方法不享受匿名放行 */
+    @Test
+    void anonymousCannotRedeemViaOtherMethods() {
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem", "GET")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem", "PUT")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/tickets/redeem", "DELETE")).isFalse();
+    }
+
+    /** 放行的只有这一条路径，前缀下的其它端点照旧需要登录 */
+    @Test
+    void anonymousCannotReachOtherTicketEndpoints() {
+        assertThat(anonymousAllowed("/api/v1/tickets", "POST")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/tickets/other", "POST")).isFalse();
+    }
+
+    /** 自助机上登录态早没了，带个过期令牌不该把这张码挡下来 */
+    @Test
+    void brokenTokenStillReachesTicketRedeem() {
+        assertThat(withBrokenToken("/api/v1/tickets/redeem", "POST")).isTrue();
+    }
+
+    // ========== 影院名录：整条前缀仅管理员（读与写都不外放） ==========
+
+    @Test
+    void anonymousCannotReadCinemaDirectory() {
+        assertThat(anonymousAllowed("/api/v1/cinema-directory/page", "GET")).isFalse();
+        assertThat(anonymousAllowed("/api/v1/cinema-directory/filters", "GET")).isFalse();
+    }
+
+    @Test
+    void userAndCinemaCannotReadCinemaDirectory() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/page", "GET", RoleEnum.USER.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/page", "GET", RoleEnum.CINEMA.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/filters", "GET", RoleEnum.USER.name())).isFalse();
+    }
+
+    @Test
+    void adminCanReadCinemaDirectory() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/page", "GET", RoleEnum.ADMIN.name())).isTrue();
+    }
+
+    @Test
+    void userAndCinemaCannotRunCinemaDirectoryImport() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/import", "POST", RoleEnum.USER.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/import", "POST", RoleEnum.CINEMA.name())).isFalse();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/import/preview", "POST", RoleEnum.USER.name())).isFalse();
+    }
+
+    @Test
+    void adminCanRunCinemaDirectoryImport() {
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directory/import", "POST", RoleEnum.ADMIN.name())).isTrue();
+    }
+
+    @Test
+    void anonymousCannotRunCinemaDirectoryImport() {
+        assertThat(anonymousAllowed("/api/v1/cinema-directory/import", "POST")).isFalse();
+    }
+
+    /** 过期令牌不构成后门：导入仍须有效 ADMIN 令牌 */
+    @Test
+    void brokenTokenCannotRunCinemaDirectoryImport() {
+        assertThat(withBrokenToken("/api/v1/cinema-directory/import", "POST")).isFalse();
+        assertThat(withBrokenToken("/api/v1/cinema-directory/import/preview", "POST")).isFalse();
+    }
+
+    // ========== 前缀命中必须带路径分隔符边界（与前端 FE-34 同形） ==========
+    // 裸 startsWith 会让只是字符前缀相邻的端点静默继承档位，两个方向都是错的：
+    // 放行的会被多放行，拦下的会被多拦下。前一个用例是正例（改动前后都该通过），
+    // 后两个用例在改回裸 startsWith 时各失败一条。
+
+    @Test
+    void realSubPathsStillMatchTheirPrefix() {
+        assertThat(anonymousAllowed("/api/v1/cinemas/page", "GET")).isTrue();
+        assertThat(anonymousAllowed("/api/v1/cinemas/regions", "GET")).isTrue();
+        assertThat(hasAccess(newInterceptor(), "/api/v1/tmdb/movie/550", "GET", RoleEnum.USER.name())).isFalse();
+    }
+
+    @Test
+    void charAdjacentPathDoesNotInheritPublicRead() {
+        // 与 /api/v1/cinemas 只差一个字符：不得被当成它一并匿名放行
+        assertThat(anonymousAllowed("/api/v1/cinemas-archive", "GET")).isFalse();
+    }
+
+    @Test
+    void charAdjacentPathDoesNotInheritAdminOnly() {
+        // 与 admin-only 的 /api/v1/cinema-directory 只差一个字符：普通用户不该被它拦下
+        assertThat(hasAccess(newInterceptor(), "/api/v1/cinema-directoryx/page", "GET", RoleEnum.USER.name())).isTrue();
+    }
+}

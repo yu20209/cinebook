@@ -1,0 +1,126 @@
+<template>
+  <div class="auth-container">
+    <div class="auth-card">
+      <h1 class="auth-title">欢迎登录 {{ SITE_NAME }}</h1>
+      <el-form
+        ref="formRef"
+        :rules="data.rules"
+        :model="data.form"
+        label-position="top"
+        status-icon
+        @submit.prevent
+      >
+        <el-form-item label="账号" prop="username">
+          <el-input
+            v-model="data.form.username"
+            placeholder="请输入账号"
+            :prefix-icon="User"
+            @keyup.enter="login"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="密码" prop="password">
+          <el-input
+            show-password
+            v-model="data.form.password"
+            placeholder="请输入密码"
+            :prefix-icon="Lock"
+            @keyup.enter="login"
+          ></el-input>
+        </el-form-item>
+        <el-form-item label="登录身份" prop="role">
+          <el-select v-model="data.form.role" class="auth-field">
+            <el-option value="USER" label="用户"></el-option>
+            <el-option value="CINEMA" label="电影院"></el-option>
+            <el-option value="ADMIN" label="管理员"></el-option>
+          </el-select>
+        </el-form-item>
+        <div class="auth-actions">
+          <el-button @click="login" type="primary" class="auth-submit" size="large">登 录</el-button>
+        </div>
+        <div class="auth-hint">还没有账号? 请<router-link to="/register" class="auth-hint__link">注 册</router-link></div>
+      </el-form>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { onMounted, reactive, ref } from "vue"
+import { useRoute, useRouter } from 'vue-router'
+import { User, Lock } from '@element-plus/icons-vue'
+import { useAuth } from "@/composables/useAuth"
+import { ElMessage, ElMessageBox } from "element-plus"
+import { isInternalPath, isPathWithin, pathForRole, SITE_NAME } from '@/utils/navigation'
+import { LOGIN_NOTICE_KEY } from '@/utils/authStorage'
+
+const route = useRoute()
+const router = useRouter()
+const { login: authLogin, user } = useAuth()
+
+const data = reactive({
+  form: {
+    username: "",
+    password: "",
+    role: "USER"
+  },
+  rules: {
+    username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
+    password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+    role: [{ required: true, message: '请选择角色', trigger: 'change' }]
+  }
+})
+
+const formRef = ref()
+
+// 已登录用户落在 /login：直接回目标页或角色主页。
+// 否则顶栏显示已登录、页面却是登录表单，再登一次会静默换号（FE-03 残留）。
+const landingPath = () => {
+  const redirectParam = route.query.redirect
+  const pathOnly = typeof redirectParam === 'string' ? redirectParam.split(/[?#]/)[0] : ''
+  const roles = isInternalPath(redirectParam) ? router.resolve(redirectParam).meta?.roles : undefined
+  // 目标页角色不符时不再带过去，否则守卫会先跳一次再弹「无权访问」
+  const roleAllowed = !roles || roles.includes(user.value?.role)
+  const isSafePath = isInternalPath(redirectParam)
+    && !isPathWithin(pathOnly, '/login')
+    && roleAllowed
+  return isSafePath ? redirectParam : pathForRole(user.value?.role)
+}
+
+onMounted(() => {
+  const notice = sessionStorage.getItem(LOGIN_NOTICE_KEY)
+  if (notice) {
+    sessionStorage.removeItem(LOGIN_NOTICE_KEY)
+    ElMessage.warning(notice)
+  }
+  if (user.value?.token) router.replace(landingPath())
+})
+
+const login = () => {
+  formRef.value.validate(async (valid) => {
+    if (!valid) return
+    try {
+      await authLogin(data.form)
+      // 回跳目标只接受站内路径。必须排除 '//' —— 协议相对 URL（'//evil.com'）同样以 '/' 开头，
+      // 此前直接用 window.location.href 赋它就会跳到外站（开放重定向）。
+      // 改走 router.push：它只解析站内路径，同时也不再把应用整页重载一遍。
+      router.push(landingPath())
+    } catch (e) {
+      // 传输类失败是 axios 错误，request.js 的响应拦截器已经弹过一次并给了中文提示；
+      // 接着再把它的英文 message（如 'Network Error'）塞进弹框就是二次提示 + 未翻译文案。
+      // 只有业务失败（useAuth 抛的普通 Error，带后端中文 msg）才需要这个弹框。
+      if (e?.isAxiosError) return
+      ElMessageBox({
+        message: e.message || '登录失败，请检查账号或密码是否正确',
+        title: '登录失败',
+        type: 'error',
+        showCancelButton: false,
+        confirmButtonText: '确定'
+      })
+    }
+  })
+}
+</script>
+
+<style scoped lang="scss">
+/* 几何、配色与背景图统一在 auth-layout.scss，与 Register.vue 共用同一套外壳 */
+@use '@/assets/css/auth-layout' as *;
+</style>

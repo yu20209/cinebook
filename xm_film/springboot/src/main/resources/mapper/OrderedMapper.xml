@@ -1,0 +1,345 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.OrderedMapper">
+
+    <!-- 列表与详情的公共投影 / 关联：两处逐字相同，抽成片段，避免改一处漏一处导致
+         列表与详情对同一条订单给出不同展示（如掉了一个关联列）。 -->
+    <sql id="orderColumns">
+        ordered.*,
+        user.name as userName,
+        film.title as filmName,
+        cinema.name as cinemaName,
+        IFNULL(room.name, '暂未关联影厅') as roomName
+    </sql>
+
+    <sql id="orderJoins">
+        LEFT JOIN user ON ordered.user_id = user.id
+        LEFT JOIN film ON ordered.film_id = film.id
+        LEFT JOIN cinema ON ordered.cinema_id = cinema.id
+        LEFT JOIN room ON ordered.room_id = room.id
+    </sql>
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultType="com.example.springboot.entity.Ordered">
+        SELECT
+        <include refid="orderColumns"/>
+        FROM ordered
+        <include refid="orderJoins"/>
+        <where>
+            <if test="orders != null and orders != ''">AND ordered.orders LIKE CONCAT('%', #{orders}, '%')</if>
+            <if test="status != null and status != ''">AND ordered.status = #{status}</if>
+            <if test="recordId != null">AND ordered.record_id = #{recordId} </if>
+            <if test="userId != null">AND ordered.user_id = #{userId} </if>
+            <if test="filmId != null">AND ordered.film_id = #{filmId} </if>
+            <if test="cinemaId != null">AND ordered.cinema_id = #{cinemaId} </if>
+            <if test="roomId != null">AND ordered.room_id = #{roomId} </if>
+        </where>
+        ORDER BY id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Ordered">
+        SELECT
+        <include refid="orderColumns"/>
+        FROM ordered
+        <include refid="orderJoins"/>
+        WHERE ordered.id = #{id}
+    </select>
+
+    <select id="selectByIdForUpdate" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Ordered">
+        SELECT * FROM ordered WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <!-- 取票大厅核销入口：唯一索引 pickup_code 命中一行。刻意不加 FOR UPDATE ——
+         并发重复核销由 markPickedUpByCode 的状态条件更新兜住，见该方法的注释。 -->
+    <select id="selectByPickupCode" parameterType="java.lang.String"
+            resultType="com.example.springboot.entity.Ordered">
+        SELECT * FROM ordered WHERE pickup_code = #{pickupCode}
+    </select>
+
+    <!-- 幂等查询：同一用户 + 同一 request_id，唯一索引保证最多一行 -->
+    <select id="selectByUserAndRequestId" resultType="com.example.springboot.entity.Ordered">
+        SELECT * FROM ordered
+        WHERE user_id = #{userId}
+          AND request_id = #{requestId}
+        LIMIT 1
+    </select>
+
+    <!-- 核销：状态条件更新，受影响行数即"本次是否真的出票"。已取票/已退票/已取消/待支付
+         都不满足 status = '待取票'，因此这一个谓词同时实现"用过即废"与"废单不发码"。
+         状态两端的取值都来自 OrderStatus 常量（由 mapper 方法传入），不在此写中文串：
+         写死的字面量与枚举一旦漂移，编译器与数据库都不会报错，只会静静少更新几行。 -->
+    <update id="markPickedUpByCode">
+        UPDATE ordered
+        SET status = #{pickedUp}
+        WHERE pickup_code = #{pickupCode}
+          AND status = #{pending}
+    </update>
+
+    <!-- 评价门禁：只有对该片取过票的用户才能评价。已取票是终态（退票/删除都进不来），
+         所以这个判断一旦成立就不会被后续状态变化推翻，修改评价时无需重复校验。 -->
+    <select id="countPickedUpByUserAndFilm" resultType="int">
+        SELECT COUNT(*) FROM ordered
+        WHERE user_id = #{userId}
+          AND film_id = #{filmId}
+          AND status = #{s.pickedUp}
+    </select>
+
+    <!-- 座位占用的唯一判定：已取消/已退票都不再锁座；待支付仅在未超时时锁座。
+         selectActiveByRecordId（占座列表 + 下单查重）与 countSeatInUse（FIND_IN_SET 片段回归测试）共用本片段 ——
+         两处口径一旦分叉，就会出现"列表说占用、查重说空闲"的双卖。
+         状态取值由 OrderStatusCriteria 以 @Param("s") 传入，SQL 里不出现中文状态字面量。 -->
+    <sql id="seatActiveCondition">
+        status NOT IN (#{s.cancelled}, #{s.refunded})
+        AND (status != #{s.pendingPayment} OR pending_timeout_at IS NULL OR pending_timeout_at &gt; NOW())
+    </sql>
+
+    <select id="selectActiveByRecordId" resultType="com.example.springboot.entity.Ordered">
+        SELECT * FROM ordered
+        WHERE record_id = #{recordId}
+          AND <include refid="seatActiveCondition"/>
+    </select>
+
+    <select id="countSeatInUse" resultType="int">
+        SELECT COUNT(*) FROM ordered
+        WHERE record_id = #{recordId}
+          AND <include refid="seatActiveCondition"/>
+          AND FIND_IN_SET(#{seat}, REPLACE(seat, '，', ',')) > 0
+    </select>
+
+    <select id="selectExpiredPendingOrders" resultType="com.example.springboot.entity.Ordered">
+        SELECT id, record_id, seat
+        FROM ordered
+        WHERE <include refid="pendingExpiredCondition"/>
+    </select>
+
+    <!-- BL-05：单笔判断「是否已过支付期限」。与清理任务共用 pendingExpiredCondition，
+         因此支付路径与后台清理不会得出相反结论 —— 两者都只看数据库时钟。 -->
+    <select id="countExpiredById" resultType="int">
+        SELECT COUNT(*) FROM ordered
+        WHERE id = #{id} AND <include refid="pendingExpiredCondition"/>
+    </select>
+
+    <!-- 「待支付且已超时」的唯一谓词定义。凡是判断超时的地方都必须 include 本片段：
+         分叉会让支付路径与清理任务对同一张订单给出相反答案。
+         与 seatActiveCondition 一样，状态取值由 OrderStatusCriteria 传入。 -->
+    <sql id="pendingExpiredCondition">
+        status = #{s.pendingPayment}
+          AND pending_timeout_at IS NOT NULL
+          AND pending_timeout_at &lt; NOW()
+    </sql>
+
+    <update id="batchCancelExpiredOrders">
+        UPDATE ordered
+        SET status = #{s.cancelled}, pending_timeout_at = NULL
+        WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+          AND status = #{s.pendingPayment}
+    </update>
+
+    <!-- 「已支付」的状态集合：本文件三条聚合语句（countTodayPaidOrders /
+         selectPaidRevenueByDay / selectTodayPaidRevenue）与 FilmMapper.filmRevenueJoin
+         （票房聚合）都 <include> 本片段 —— 全仓只有这一处定义，票房榜与今日/逐日票房
+         不会因各写一遍而分叉。列名不带表前缀，是因为各处都是单表上下文
+         （ordered 或 ordered o），加了前缀反而限定死调用方。 -->
+    <sql id="paidOrderStatuses">status IN ('待取票', '已取票')</sql>
+
+    <!-- 今日票房：今天支付的售票收入合计（元）+ 统计时刻。
+         日期口径取 pay_time（收款日），不是 ordered.start（放映日）—— 本系统是提前购票，
+         按放映日聚合会让"今日"长期恒为 0，指标失去意义。
+         SUM 在空集上返回 NULL，COALESCE 兜成 0：区间聚合的 0 是真实值（今天还没卖票），
+         不是"取不到数据"，前端因此不渲染「暂无数据」。
+         别名写 camelCase：map-underscore-to-camel-case 只转换 bean 属性，不转换 Map 的 key。 -->
+    <select id="selectTodayPaidRevenue" resultType="com.example.springboot.dto.response.TodayRevenueView">
+        SELECT COALESCE(SUM(total), 0) AS total,
+               DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s') AS updatedAt
+        FROM ordered
+        WHERE pay_time >= CURDATE()
+          AND pay_time &lt; CURDATE() + INTERVAL 1 DAY
+          AND <include refid="paidOrderStatuses"/>
+    </select>
+
+    <!-- 今日已支付订单数（笔）。与 selectTodayPaidRevenue 共用同一片段、同一 pay_time 区间：
+         两者口径一旦不一致，就会出现"收入涨了笔数没涨"的自相矛盾。 -->
+    <select id="countTodayPaidOrders" resultType="int">
+        SELECT COUNT(*)
+        FROM ordered
+        WHERE pay_time >= CURDATE()
+          AND pay_time &lt; CURDATE() + INTERVAL 1 DAY
+          AND <include refid="paidOrderStatuses"/>
+    </select>
+
+    <!-- 逐日已支付票房与订单数，覆盖 [from, to)。
+         没有销售的日子**不产生行**，由 StatisticsService 补零 —— 折线图缺一天会把它
+         连成一条跨越两天的直线，读起来像"那天也有销售额"。补零与「取不到数据」是两回事。
+         GROUP BY / ORDER BY 必须与 SELECT 里那个表达式逐字相同（都写 DATE_FORMAT）：
+         MySQL 8 默认开启 only_full_group_by，写成更"自然"的 GROUP BY DATE(pay_time)
+         会因为 SELECT 表达式不在 GROUP BY 里而直接报错。别把它简化回去。 -->
+    <select id="selectPaidRevenueByDay" resultType="com.example.springboot.dto.response.DailyRevenueView">
+        SELECT DATE_FORMAT(pay_time, '%Y-%m-%d') AS date,
+               COALESCE(SUM(total), 0) AS revenue,
+               COUNT(*) AS orders
+        FROM ordered
+        WHERE pay_time >= #{from}
+          AND pay_time &lt; #{to}
+          AND <include refid="paidOrderStatuses"/>
+        GROUP BY DATE_FORMAT(pay_time, '%Y-%m-%d')
+        ORDER BY DATE_FORMAT(pay_time, '%Y-%m-%d')
+    </select>
+
+    <!-- 按状态计数：大盘的「待取票订单」用它 -->
+    <select id="countByStatus" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE status = #{status}
+    </select>
+
+    <!-- 大盘统计：订单状态分布（由 ordered 实时计数）。
+         **刻意不 include paidOrderStatuses** —— 那个片段是「已支付」口径
+         （待取票 + 已取票），而这里是全部五态的结构，过滤掉未支付 / 已取消 / 已退票
+         会让这张卡只剩两种颜色。别把它「顺手统一」回去。
+         未出现的状态不产生行，由前端按 ORDER_STATUS_OPTIONS 补 0。 -->
+    <select id="countGroupByStatus" resultType="com.example.springboot.dto.response.NameValueView">
+        SELECT status AS name, COUNT(*) AS value
+        FROM ordered
+        GROUP BY status
+    </select>
+
+    <!-- 删除守卫引用计数 -->
+    <select id="countByFilmId" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE film_id = #{filmId}
+    </select>
+
+    <select id="countByCinemaId" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE cinema_id = #{cinemaId}
+    </select>
+
+    <select id="countByRoomId" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE room_id = #{roomId}
+    </select>
+
+    <select id="countByRecordId" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE record_id = #{recordId}
+    </select>
+
+    <select id="countByUserId" resultType="int">
+        SELECT COUNT(*) FROM ordered WHERE user_id = #{userId}
+    </select>
+
+    <!-- 插入操作 -->
+    <insert id="insert" parameterType="com.example.springboot.entity.Ordered"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ordered
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orders != null">orders,</if>
+            <if test="requestId != null">request_id,</if>
+            <if test="recordId != null">record_id,</if>
+            <if test="userId != null">user_id,</if>
+            <if test="filmId != null">film_id,</if>
+            <if test="img != null">img,</if>
+            <if test="cinemaId != null">cinema_id,</if>
+            <if test="roomId != null">room_id,</if>
+            <if test="appointment != null">appointment,</if>
+            <if test="total != null">total,</if>
+            <!-- 单价是下单时的快照，只在 insert 写入，updateById 刻意不含它 -->
+            <if test="unitPrice != null">unit_price,</if>
+            <if test="number != null">number,</if>
+            <if test="status != null">status,</if>
+            <if test="start != null">start,</if>
+            <if test="seat != null">seat,</if>
+            <if test="createTime != null">create_time,</if>
+            <!-- BL-05：哨兵置真时用库时钟算超时点，见 Ordered.pendingTimeoutFromDb 的注释。
+                 INTERVAL 5 MINUTE 必须与 OrderedService.PENDING_TIMEOUT_MINUTES 一致。 -->
+            <if test="pendingTimeoutFromDb != null and pendingTimeoutFromDb">pending_timeout_at,</if>
+            <if test="(pendingTimeoutFromDb == null or !pendingTimeoutFromDb) and pendingTimeoutAt != null">pending_timeout_at,</if>
+            <if test="payTime != null">pay_time,</if>
+            <if test="payAmount != null">pay_amount,</if>
+            <if test="refundTime != null">refund_time,</if>
+            <if test="refundAmount != null">refund_amount,</if>
+            <if test="pickupCode != null">pickup_code,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orders != null">#{orders},</if>
+            <if test="requestId != null">#{requestId},</if>
+            <if test="recordId != null">#{recordId},</if>
+            <if test="userId != null">#{userId},</if>
+            <if test="filmId != null">#{filmId},</if>
+            <if test="img != null">#{img},</if>
+            <if test="cinemaId != null">#{cinemaId},</if>
+            <if test="roomId != null">#{roomId},</if>
+            <if test="appointment != null">#{appointment},</if>
+            <if test="total != null">#{total},</if>
+            <if test="unitPrice != null">#{unitPrice},</if>
+            <if test="number != null">#{number},</if>
+            <if test="status != null">#{status},</if>
+            <if test="start != null">#{start},</if>
+            <if test="seat != null">#{seat},</if>
+            <if test="createTime != null">#{createTime},</if>
+            <if test="pendingTimeoutFromDb != null and pendingTimeoutFromDb">NOW() + INTERVAL 5 MINUTE,</if>
+            <if test="(pendingTimeoutFromDb == null or !pendingTimeoutFromDb) and pendingTimeoutAt != null">#{pendingTimeoutAt},</if>
+            <if test="payTime != null">#{payTime},</if>
+            <if test="payAmount != null">#{payAmount},</if>
+            <if test="refundTime != null">#{refundTime},</if>
+            <if test="refundAmount != null">#{refundAmount},</if>
+            <if test="pickupCode != null">#{pickupCode},</if>
+        </trim>
+    </insert>
+
+    <!-- 更新操作 -->
+    <update id="updateById" parameterType="com.example.springboot.entity.Ordered">
+        UPDATE ordered
+        <set>
+            <if test="orders != null">orders = #{orders},</if>
+            <if test="recordId != null">record_id = #{recordId},</if>
+            <if test="userId != null">user_id = #{userId},</if>
+            <if test="filmId != null">film_id = #{filmId},</if>
+            <if test="img != null">img = #{img},</if>
+            <if test="cinemaId != null">cinema_id = #{cinemaId},</if>
+            <if test="roomId != null">room_id = #{roomId},</if>
+            <if test="appointment != null">appointment = #{appointment},</if>
+            <if test="total != null">total = #{total},</if>
+            <if test="number != null">number = #{number},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="start != null">start = #{start},</if>
+            <if test="seat != null">seat = #{seat},</if>
+            <if test="createTime != null">create_time = #{createTime},</if>
+            <!-- 待支付倒计时在本语句里只有两种合法写法，其余更新一律不碰该列
+                 （该列另有 insert 与 batchCancelExpiredOrders 两个写者，都不经此处）：
+                 ① 显式清空 —— clearPendingTimeout 置真（状态离开待支付时由服务层设置）；
+                 ② 写入新值 —— pendingTimeoutAt 非空（下单 / 改期）。
+                 用 <choose> 而非两个并列 <if>：同一列写两次会互相覆盖，只能有一个分支生效。
+                 此前这一列不受守卫，任何部分更新都会顺手清掉倒计时，自动取消便扫不到该单
+                 （selectExpiredPendingOrders 要求该列非空）。 -->
+            <choose>
+                <when test="clearPendingTimeout != null and clearPendingTimeout">pending_timeout_at = NULL,</when>
+                <when test="pendingTimeoutAt != null">pending_timeout_at = #{pendingTimeoutAt},</when>
+            </choose>
+            <!-- 资金凭证：留痕字段只增不改，退票不得抹掉 pay_time -->
+            <if test="payTime != null">pay_time = #{payTime},</if>
+            <if test="payAmount != null">pay_amount = #{payAmount},</if>
+            <if test="refundTime != null">refund_time = #{refundTime},</if>
+            <if test="refundAmount != null">refund_amount = #{refundAmount},</if>
+            <if test="pickupCode != null">pickup_code = #{pickupCode},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="java.lang.Integer">
+        DELETE FROM ordered WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM ordered WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

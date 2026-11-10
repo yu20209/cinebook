@@ -1,0 +1,29 @@
+<!--
+  详情页首屏骨架（影片详情 / 选择影院 / 影院详情共用）。
+
+  形状与真实页头一致（海报 + 若干文字行），数据到位时不会跳高。
+  样式在 front-pages.scss 的 .detail-skeleton 一组里，本组件只承载标记 ——
+  三处此前各自复制了同一段 7 行标记，改一次要动三个文件。
+
+  wide：头图是横版的页面（影院详情）传 true —— 影院图取 10:7，与影片页的 2:3
+  竖版海报形状不同，骨架必须跟着走，否则数据到位时首屏跳高。
+
+  纯装饰，故整块 aria-hidden；灰块不是数据，不违反「禁止用假数据填充」。
+-->
+<template>
+  <div class="detail-skeleton" :class="{ 'detail-skeleton--wide': wide }" aria-hidden="true">
+    <div class="detail-skeleton__poster"></div>
+    <div class="detail-skeleton__lines">
+      <div class="detail-skeleton__line detail-skeleton__line--title"></div>
+      <div class="detail-skeleton__line"></div>
+      <div class="detail-skeleton__line"></div>
+      <div class="detail-skeleton__line detail-skeleton__line--short"></div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+defineProps({
+  wide: { type: Boolean, default: false },
+})
+</script>

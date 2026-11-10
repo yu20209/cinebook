@@ -1,0 +1,226 @@
+package com.example.springboot.service;
+
+import com.example.springboot.common.enums.ErrorCode;
+import com.example.springboot.common.enums.RechargeStatus;
+import com.example.springboot.common.enums.RoleEnum;
+import com.example.springboot.entity.RechargeOrder;
+import com.example.springboot.exception.CustomException;
+import com.example.springboot.mapper.RechargeOrderMapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+/**
+ * 充值单据状态机。四条契约：
+ *   1. 提交申请 → 只生成「处理中」单据，余额分文不动
+ *   2. 回调成功 → 单据「已完成」并入账
+ *   3. 回调失败 → 单据「已失败」，余额不变
+ *   4. 已处理单据不可重复回调（幂等）
+ */
+@ExtendWith(MockitoExtension.class)
+@SuppressWarnings("java:S5778") // 测试 lambda 内除被测调用外还有 helper 调用，规则只影响可读性
+class RechargeServiceTest {
+
+    private static final Integer USER_ID = 6;
+
+    @Mock
+    private RechargeOrderMapper rechargeOrderMapper;
+
+    @Mock
+    private WalletService walletService;
+
+    @InjectMocks
+    private RechargeService rechargeService;
+
+    @Test
+    void createRechargeShouldCreateProcessingOrderWithoutTouchingBalance() {
+        RechargeOrder created = rechargeService.createRecharge(USER_ID, RoleEnum.USER.name(), new BigDecimal("200.00"));
+
+        ArgumentCaptor<RechargeOrder> captor = ArgumentCaptor.forClass(RechargeOrder.class);
+        verify(rechargeOrderMapper).insert(captor.capture());
+        RechargeOrder saved = captor.getValue();
+
+        assertEquals(RechargeStatus.PROCESSING, saved.getStatus());
+        assertEquals(USER_ID, saved.getUserId());
+        assertEquals(0, new BigDecimal("200.00").compareTo(saved.getAmount()));
+        assertNotNull(saved.getRechargeNo());
+        assertFalse(saved.getRechargeNo().isBlank());
+        assertSame(saved, created);
+
+        // 关键：提交单据不得入账
+        verifyNoInteractions(walletService);
+    }
+
+    @Test
+    void createRechargeWithNonUserRoleShouldThrow() {
+        BigDecimal amount = new BigDecimal("200.00");
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.createRecharge(USER_ID, RoleEnum.CINEMA.name(), amount));
+
+        assertEquals(ErrorCode.FORBIDDEN.code(), ex.getCode());
+        verify(rechargeOrderMapper, never()).insert(any());
+        verifyNoInteractions(walletService);
+    }
+
+    @Test
+    void createRechargeWithNonPositiveAmountShouldThrow() {
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.createRecharge(USER_ID, RoleEnum.USER.name(), BigDecimal.ZERO));
+
+        assertEquals(ErrorCode.PARAM_INVALID.code(), ex.getCode());
+        verify(rechargeOrderMapper, never()).insert(any());
+    }
+
+    @Test
+    void createRechargeWithAmountAboveLimitShouldThrow() {
+        BigDecimal amount = new BigDecimal("50000.01");
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.createRecharge(USER_ID, RoleEnum.USER.name(), amount));
+
+        assertEquals(ErrorCode.PARAM_INVALID.code(), ex.getCode());
+        verify(rechargeOrderMapper, never()).insert(any());
+    }
+
+    @Test
+    void handleCallbackSuccessShouldMarkDoneAndCreditBalance() {
+        when(rechargeOrderMapper.selectByIdForUpdate(7)).thenReturn(processingOrder());
+
+        rechargeService.handleCallback(7, true, null, RoleEnum.ADMIN.name());
+
+        verify(walletService).creditRecharge(USER_ID, new BigDecimal("200.00"), 7);
+
+        RechargeOrder update = captureUpdate();
+        assertEquals(RechargeStatus.SUCCESS, update.getStatus());
+        assertNotNull(update.getFinishTime());
+    }
+
+    @Test
+    void handleCallbackFailureShouldMarkFailedWithoutCrediting() {
+        when(rechargeOrderMapper.selectByIdForUpdate(7)).thenReturn(processingOrder());
+
+        rechargeService.handleCallback(7, false, "余额不足", RoleEnum.ADMIN.name());
+
+        verifyNoInteractions(walletService);
+
+        RechargeOrder update = captureUpdate();
+        assertEquals(RechargeStatus.FAILED, update.getStatus());
+        assertEquals("余额不足", update.getRemark());
+        assertNotNull(update.getFinishTime());
+    }
+
+    @Test
+    void handleCallbackOnAlreadyDoneOrderShouldThrow() {
+        RechargeOrder done = processingOrder();
+        done.setStatus(RechargeStatus.SUCCESS);
+        when(rechargeOrderMapper.selectByIdForUpdate(7)).thenReturn(done);
+
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.handleCallback(7, true, null, RoleEnum.ADMIN.name()));
+
+        assertEquals(ErrorCode.BUSINESS_CONFLICT.code(), ex.getCode());
+        verify(walletService, never()).creditRecharge(anyInt(), any(), anyInt());
+        verify(rechargeOrderMapper, never()).updateById(any());
+    }
+
+    @Test
+    void handleCallbackOnAlreadyFailedOrderShouldThrow() {
+        RechargeOrder failed = processingOrder();
+        failed.setStatus(RechargeStatus.FAILED);
+        when(rechargeOrderMapper.selectByIdForUpdate(7)).thenReturn(failed);
+
+        assertThrows(CustomException.class,
+                () -> rechargeService.handleCallback(7, true, null, RoleEnum.ADMIN.name()));
+
+        verify(walletService, never()).creditRecharge(anyInt(), any(), anyInt());
+    }
+
+    @Test
+    void handleCallbackAsUserShouldThrowForbiddenEvenForOwnOrder() {
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.handleCallback(7, true, null, RoleEnum.USER.name()));
+
+        assertEquals(ErrorCode.FORBIDDEN.code(), ex.getCode());
+        verify(rechargeOrderMapper, never()).selectByIdForUpdate(anyInt());
+        verify(walletService, never()).creditRecharge(anyInt(), any(), anyInt());
+        verify(rechargeOrderMapper, never()).updateById(any());
+    }
+
+    @Test
+    void handleCallbackWhenOrderMissingShouldThrowNotFound() {
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.handleCallback(7, true, null, RoleEnum.ADMIN.name()));
+
+        assertEquals(ErrorCode.NOT_FOUND.code(), ex.getCode());
+        verify(walletService, never()).creditRecharge(anyInt(), any(), anyInt());
+    }
+
+    @Test
+    void selectScopedAsUserShouldForceOwnUserIdIgnoringRequestParam() {
+        RechargeOrder query = new RechargeOrder();
+        query.setUserId(999);
+        when(rechargeOrderMapper.selectAll(any())).thenReturn(List.of());
+
+        rechargeService.selectScoped(query, RoleEnum.USER.name(), USER_ID);
+
+        assertEquals(USER_ID, captureCondition().getUserId());
+    }
+
+    @Test
+    void selectScopedAsAdminShouldNotFilterByUser() {
+        when(rechargeOrderMapper.selectAll(any())).thenReturn(List.of());
+
+        rechargeService.selectScoped(null, RoleEnum.ADMIN.name(), 1);
+
+        assertNull(captureCondition().getUserId());
+    }
+
+    @Test
+    void selectScopedAsCinemaShouldThrowForbidden() {
+        CustomException ex = assertThrows(CustomException.class,
+                () -> rechargeService.selectScoped(null, RoleEnum.CINEMA.name(), 5));
+
+        assertEquals(ErrorCode.FORBIDDEN.code(), ex.getCode());
+        verify(rechargeOrderMapper, never()).selectAll(any());
+    }
+
+    private RechargeOrder captureCondition() {
+        ArgumentCaptor<RechargeOrder> captor = ArgumentCaptor.forClass(RechargeOrder.class);
+        verify(rechargeOrderMapper).selectAll(captor.capture());
+        return captor.getValue();
+    }
+
+    private RechargeOrder processingOrder() {
+        RechargeOrder order = new RechargeOrder();
+        order.setId(7);
+        order.setRechargeNo("R20260928ABCD1234");
+        order.setUserId(USER_ID);
+        order.setAmount(new BigDecimal("200.00"));
+        order.setStatus(RechargeStatus.PROCESSING);
+        return order;
+    }
+
+    private RechargeOrder captureUpdate() {
+        ArgumentCaptor<RechargeOrder> captor = ArgumentCaptor.forClass(RechargeOrder.class);
+        verify(rechargeOrderMapper).updateById(captor.capture());
+        return captor.getValue();
+    }
+}

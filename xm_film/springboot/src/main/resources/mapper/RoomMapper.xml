@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.RoomMapper">
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultType="com.example.springboot.entity.Room">
+        SELECT * FROM room
+        <where>
+            <if test="cinemaId != null">
+                AND cinema_id = #{cinemaId}
+            </if>
+            <if test="name != null">
+                AND name LIKE CONCAT('%', #{name}, '%')
+            </if>
+        </where>
+        ORDER BY id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Room">
+        SELECT * FROM room WHERE id = #{id}
+    </select>
+
+    <!-- 排片写入的串行化入口：见 RoomMapper.selectByIdForUpdate 的注释。
+         用 SELECT ... FOR UPDATE 锁影厅行，同一影厅的「查重叠 → 插入」因此互斥；
+         不同影厅之间不受影响。锁随所在事务提交/回滚释放。 -->
+    <select id="selectByIdForUpdate" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Room">
+        SELECT * FROM room WHERE id = #{id} FOR UPDATE
+    </select>
+
+    <insert id="insert" parameterType="com.example.springboot.entity.Room"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO room
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="cinemaId != null">cinema_id,</if>
+            <if test="title != null">title,</if>
+            <if test="name != null">name,</if>
+            <if test="seatRows != null">seat_rows,</if>
+            <if test="seatCols != null">seat_cols,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="cinemaId != null">#{cinemaId},</if>
+            <if test="title != null">#{title},</if>
+            <if test="name != null">#{name},</if>
+            <if test="seatRows != null">#{seatRows},</if>
+            <if test="seatCols != null">#{seatCols},</if>
+        </trim>
+    </insert>
+
+
+    <update id="updateById" parameterType="com.example.springboot.entity.Room">
+        UPDATE room
+        <set>
+            <if test="cinemaId != null">cinema_id = #{cinemaId},</if>
+            <if test="title != null">title = #{title},</if>
+            <if test="name != null">name = #{name},</if>
+            <if test="seatRows != null">seat_rows = #{seatRows},</if>
+            <if test="seatCols != null">seat_cols = #{seatCols},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除守卫引用计数 -->
+    <select id="countByCinemaId" resultType="int">
+        SELECT COUNT(*) FROM room WHERE cinema_id = #{cinemaId}
+    </select>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="com.example.springboot.entity.Room">
+        DELETE FROM room WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM room WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

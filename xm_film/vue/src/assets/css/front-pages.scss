@@ -1,0 +1,392 @@
+/* 用户前台页面的共用样式
+ *
+ * 与 admin-pages.scss 对称：前台的列表页 / 筛选页也反复用同一套骨架
+ * （窄容器 + 筛选面板 + 卡片 + 搜索框 + 表格缩略图）。
+ * 挂在 Front.vue 的 .front-content 下，作用域限定在前台内容区。
+ * 由 main.js 引入一次。 */
+
+/* 内容测度的唯一出处（1200px 上限）。
+ * 页头内层与各页内容区都从这里取：此前 `.page-narrow`（55%）/ `.page-wide`（85%）
+ * 之外还有 9 处手写 `width: 60% + max-width: 1200px`，改一次要动多个文件。
+ *
+ * 为什么做成类而不是 mixin：组件里的 <style scoped> 是独立编译单元，看不到本文件的
+ * mixin 定义；而类名是全局样式，只要元素在 .front-content 下就能命中。
+ * 组件的 scoped 样式不要再给同一元素声明 width / max-width —— SFC 样式在
+ * main.js 引入的 SCSS 之后加载，声明会覆盖这里的测度。 */
+.front-content {
+  /* 列表 / 筛选页容器（55% 窄版） */
+  .page-narrow {
+    width: 55%;
+    max-width: 1200px;
+    margin: var(--space-20) auto;
+  }
+
+  /* 列表 / 筛选页容器（85% 宽版） */
+  .page-wide {
+    width: 85%;
+    max-width: 1200px;
+    margin: var(--space-20) auto;
+  }
+
+  /* 与内容区同一测度、但没有纵向外边距：用于页头内层与内容面板。
+     55% 与 85% 两档之外还有一处 60% —— 详情/影评/选影院三页一直用 60%，保留原值。 */
+  .measure-inline,
+  .measure {
+    width: 60%;
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* 宽版（对应 .page-wide 的 85%），页头内层用 */
+  .measure-inline--wide {
+    width: 85%;
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* 成叠的卡片 */
+  .page-card {
+    margin-bottom: var(--space-8);
+    /* 前台是消费端，卡片内边距取宽松档（密度分端是有意决策）。
+       只覆写这一处有分歧的属性 —— 底色 / 圆角 / 阴影仍由 global.css 的 .card 单点提供，
+       不在这里重写一套，否则「卡片长什么样」就有了两个出处。 */
+    padding: var(--space-24);
+  }
+
+  /* 区块标题行：标题 + 右侧「全部 >」链接，下面一条通栏淡分隔线压一段品牌短线 */
+  .section-head {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-12);
+    padding-bottom: var(--space-8);
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  /* 品牌短线是装饰元素（不承载文字），用 --color-brand（前台 #ef4238，仅需 ≥3:1）；
+     标题文字用 --el-color-primary（前台 #BF352D，5.58:1），两者不可互换 */
+  .section-head::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: var(--space-40);
+    height: 2px;
+    background-color: var(--color-brand);
+  }
+
+  /* 区块标题承载文字，含中文故字重只能用 400 / 700 */
+  .section-head__title {
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-bold);
+    color: var(--el-color-primary);
+  }
+
+  /* 文字型链接：默认常规文字色 6.11:1，hover 到主色 5.58:1，两端都达 AA */
+  .section-head__more {
+    margin-left: auto;
+    font-size: var(--fs-sm);
+    color: var(--el-text-color-regular);
+    transition: color 100ms ease-out;
+
+    &:hover {
+      color: var(--el-color-primary);
+    }
+  }
+
+  /* 海报墙：按容器宽度自适应列数，不写死每行几张。
+     列宽下限 180px 是海报的可用最小宽度，上限交给 1fr 分配。 */
+  .poster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-20);
+    margin-top: var(--space-20);
+  }
+
+  /* 无数据的占位（接口成功但结果为空 → 「暂无数据」；
+     请求失败 → 「数据加载失败，请稍后重试」。两者文案不同，样式相同） */
+  .empty-hint {
+    padding: var(--space-40) 0;
+    font-size: var(--fs-base);
+    color: var(--el-text-color-regular);
+    text-align: center;
+  }
+
+  /* 影院服务的统一配色：同一组服务在「影院列表」与「影院详情横幅」两处必须同色。
+     只共享底色 —— 两页的形状不同（列表是普通标签、详情是带图标的片），各自随页面写。
+     底色一律取功能色基色并配 --color-on-accent 白字：该组合在浅底与深底上都达 AA。 */
+  .service-tag--refund {
+    background-color: var(--el-color-primary);
+  }
+
+  .service-tag--promo {
+    background-color: var(--el-color-warning);
+  }
+
+  .service-tag--wifi {
+    background-color: var(--el-color-info);
+  }
+
+  /* 详情页首屏骨架：影片详情 / 选择影院 / 影院详情三处共用，形状与真实头图一致，
+     数据到位时不会跳高。灰块不是数据，不违反「禁止用假数据填充」。 */
+  .detail-skeleton {
+    display: flex;
+    width: 60%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-32);
+  }
+
+  .detail-skeleton__poster {
+    flex-shrink: 0;
+    width: 220px;
+    aspect-ratio: 2 / 3;
+    border-radius: var(--el-border-radius-base);
+    background-color: var(--el-fill-color-dark);
+  }
+
+  /* 头图是横版的页面（影院详情）用这一档：影院图取 10:7，与影院列表页同比例，
+     不是影片页的 2:3 竖版海报。骨架不跟着变形，数据到位时首屏就会跳高。 */
+  .detail-skeleton--wide .detail-skeleton__poster {
+    width: 240px;
+    aspect-ratio: 10 / 7;
+  }
+
+  .detail-skeleton__lines {
+    flex: 1;
+    margin-left: var(--space-24);
+    padding-top: var(--space-8);
+  }
+
+  .detail-skeleton__line {
+    height: 16px;
+    margin-bottom: var(--space-12);
+    border-radius: var(--el-border-radius-base);
+    background-color: var(--el-fill-color-dark);
+  }
+
+  .detail-skeleton__line--title {
+    width: 40%;
+    height: 28px;
+  }
+
+  .detail-skeleton__line--short {
+    width: 25%;
+  }
+
+  /* 列表页搜索框 */
+  .search-input {
+    width: 300px;
+    margin-right: var(--space-12);
+  }
+
+  /* 表格单元格里的方形缩略图 */
+  .cell-thumb {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--el-border-radius-base);
+    object-fit: cover;
+  }
+
+  .cell-thumb--spaced {
+    margin-top: var(--space-8);
+  }
+
+  /* 表格行内的操作按钮 */
+  .row-action {
+    font-size: var(--fs-lg);
+  }
+
+  /* 一格放多个操作按钮时的按钮组：一律从同一左边缘起排。
+   * EP 的按钮间距是 `.el-button + .el-button { margin-left: 12px }`，列宽不够折行时
+   * 第二个按钮会被这 12px 右推，两行左右错开。改用 flex + gap 后，
+   * 间距与"是否折行"解耦，一行也好、折行也好都对齐。 */
+  .row-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-8);
+
+    .el-button + .el-button {
+      margin-left: 0;
+    }
+  }
+
+  .field-full {
+    width: 100%;
+  }
+
+  /* 影片筛选面板（类型 / 年代 / 区域 / 状态四行） */
+  .filter-panel {
+    padding: var(--space-20) var(--space-32);
+    border: 1px solid var(--el-border-color-darker);
+    border-radius: var(--el-border-radius-base);
+  }
+
+  .filter-row {
+    display: flex;
+    align-items: center;
+    padding: var(--space-16) 0;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .filter-row--last {
+    border-bottom: none;
+  }
+
+  .filter-label {
+    width: 60px;
+    font-size: var(--fs-md);
+  }
+
+  .filter-options {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: var(--space-8);
+  }
+
+  /* fieldset 默认带边框、内边距和 min-width，会把整条筛选栏挤窄 */
+  fieldset.filter-options {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  /* 筛选项是 <button> 而非 div —— 原生可 Tab 聚焦、可回车/Space 触发，
+     不需要额外补 role / tabindex / keydown（所有交互支持键盘） */
+  .filter-chip {
+    padding: var(--space-4) var(--space-12);
+    border: 1px solid var(--el-border-color);
+    border-radius: var(--el-border-radius-base);
+    background-color: var(--el-bg-color);
+    color: var(--el-text-color-regular);
+    font-family: inherit;
+    font-size: var(--fs-base);
+    cursor: pointer;
+    transition: color 100ms ease-out, border-color 100ms ease-out, background-color 100ms ease-out;
+
+    &:hover {
+      border-color: var(--el-color-primary);
+      color: var(--el-color-primary);
+    }
+  }
+
+  /* 选中态不仅要换色，还要加粗 —— 禁止仅靠颜色传递状态。
+     底色用主色基色承载白字（前台 5.58:1 达 AA）。 */
+  .filter-chip--active {
+    border-color: var(--el-color-primary);
+    background-color: var(--el-color-primary);
+    color: var(--color-on-accent);
+    font-weight: var(--fw-bold);
+  }
+
+  .filter-chip--active:hover {
+    border-color: var(--el-color-primary-dark-2);
+    background-color: var(--el-color-primary-dark-2);
+    color: var(--color-on-accent);
+  }
+
+  /* 评价条目（影片详情页「用户热评」与影评页共用，因此收在这里，两页不再各写一份） */
+  .marks-list {
+    margin-top: var(--space-16);
+  }
+
+  .mark-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-12);
+    padding: var(--space-12) 0;
+    border-bottom: 1px solid var(--el-fill-color-dark);
+
+    /* 点赞：文字按钮。已赞用主色（5.58:1）、未赞用常规文字色（6.11:1），两态都达 AA。
+     * 必须嵌在 .mark-item 里才够特异性：编译出 .front-content .mark-item .mark-item__like（0-3-0），
+     * 压过 EP 的 .el-button.is-link（0-2-0）。若平铺成 .mark-item__like 就只有 0-2-0，与 EP 打平，
+     * 胜负交给样式表顺序 —— 那正是要求用特异性而非 !important 解决的场景。 */
+    .mark-item__like {
+      color: var(--el-text-color-regular);
+
+      &:hover {
+        color: var(--el-color-primary);
+      }
+
+      &:active {
+        color: var(--el-color-primary-dark-2);
+      }
+
+      /* 上面三条（0-3-0 / 0-4-0）会压过 EP 的 .el-button.is-disabled（0-2-0），
+       * 所以禁用态必须显式补一条，否则请求进行中按钮看着还能点（五态）。 */
+      &:disabled {
+        color: var(--el-text-color-disabled);
+      }
+    }
+
+    .mark-item__like--on {
+      color: var(--el-color-primary);
+    }
+
+    .mark-item__like--on:hover {
+      color: var(--el-color-primary-dark-2);
+    }
+  }
+
+  /* 评价人头像：圆形图片容器。浅主色底只在图片加载完成前垫着，避免头像位置闪白；
+     无图与破图都由 FilmMarks 在 el-avatar 的默认插槽里渲染默认头像图，不再放昵称首字，
+     故这里不再设 color（已无文字可着色）。 */
+  .mark-item__avatar {
+    flex: 0 0 auto;
+    background-color: var(--el-color-primary-light-9);
+  }
+
+  .mark-item__main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mark-item__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+  }
+
+  .mark-item__user {
+    font-weight: var(--fw-bold);
+    color: var(--el-text-color-primary);
+  }
+
+  .mark-item__score {
+    /* 顶到行尾：有「我的」标签时也保持评分右对齐 */
+    margin-left: auto;
+    font-weight: var(--fw-bold);
+    color: var(--color-rating-text);
+  }
+
+  .mark-item__text {
+    margin-top: var(--space-8);
+    color: var(--el-text-color-regular);
+    line-height: var(--lh-base);
+  }
+
+  .mark-item__meta {
+    margin-top: var(--space-4);
+    font-size: var(--fs-xs);
+    color: var(--el-text-color-regular);
+  }
+
+  .mark-item__actions {
+    flex: 0 0 auto;
+  }
+
+  /* 评价列表的加载 / 空 / 失败提示（空态与失败态文案固定且必须区分） */
+  .marks-hint {
+    padding: var(--space-20) 0;
+    color: var(--el-text-color-regular);
+  }
+
+  .marks-hint--error {
+    color: var(--el-color-danger);
+  }
+}

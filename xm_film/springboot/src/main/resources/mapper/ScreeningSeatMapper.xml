@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.springboot.mapper.ScreeningSeatMapper">
+
+    <!-- ============ 基础映射 ============ -->
+
+    <resultMap id="screeningSeatMap" type="com.example.springboot.entity.ScreeningSeat">
+        <id column="id" property="id"/>
+        <result column="record_id" property="recordId"/>
+        <result column="seat_code" property="seatCode"/>
+        <result column="status" property="status"/>
+        <result column="lock_order_no" property="lockOrderNo"/>
+        <result column="lock_expire_at" property="lockExpireAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <!-- ============ 查询 ============ -->
+
+    <select id="selectByRecordId" resultMap="screeningSeatMap">
+        SELECT * FROM screening_seat WHERE record_id = #{recordId} ORDER BY seat_code
+    </select>
+
+    <select id="selectByRecordIdAndSeatCodes" resultMap="screeningSeatMap">
+        SELECT * FROM screening_seat
+        WHERE record_id = #{recordId}
+          AND seat_code IN
+        <foreach collection="seatCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+        ORDER BY seat_code
+    </select>
+
+    <!-- ============ 条件更新（核心：只有状态符合预期时才允许变更） ============ -->
+
+    <!-- 单座锁定：status=0（可用）时才允许，过期时间用数据库时钟算 -->
+    <update id="lockSeat">
+        UPDATE screening_seat
+        SET status = 1,
+            lock_order_no = #{orderNo},
+            lock_expire_at = NOW() + INTERVAL #{expireMinutes} MINUTE,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND seat_code = #{seatCode}
+          AND status = 0
+    </update>
+
+    <!--
+      批量锁定：单条 UPDATE + IN，只更新仍为可用(status=0)的座位。
+      返回的是"真正被锁到的行数"，调用方必须校验 == 座位总数，否则整体回滚。
+      不用 ; 分隔的多语句（JDBC 未开 allowMultiQueries，且多语句无法拿到精确总数）。
+    -->
+    <update id="batchLockSeats">
+        UPDATE screening_seat
+        SET status = 1,
+            lock_order_no = #{orderNo},
+            lock_expire_at = NOW() + INTERVAL #{expireMinutes} MINUTE,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND status = 0
+          AND seat_code IN
+        <foreach collection="seatCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+    </update>
+
+    <!-- 单座售出：只有锁定该座位的订单号 + status=1 才能转为已售出 -->
+    <update id="markSold">
+        UPDATE screening_seat
+        SET status = 2,
+            lock_order_no = NULL,
+            lock_expire_at = NULL,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND seat_code = #{seatCode}
+          AND status = 1
+          AND lock_order_no = #{orderNo}
+    </update>
+
+    <!-- 批量售出：同样单条 UPDATE，校验受影响行数 -->
+    <update id="batchMarkSold">
+        UPDATE screening_seat
+        SET status = 2,
+            lock_order_no = NULL,
+            lock_expire_at = NULL,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND status = 1
+          AND lock_order_no = #{orderNo}
+          AND seat_code IN
+        <foreach collection="seatCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+    </update>
+
+    <!-- 单座释放：取消/超时清理时，只释放自己锁定的座位 -->
+    <update id="releaseSeat">
+        UPDATE screening_seat
+        SET status = 0,
+            lock_order_no = NULL,
+            lock_expire_at = NULL,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND seat_code = #{seatCode}
+          AND status = 1
+          AND lock_order_no = #{orderNo}
+    </update>
+
+    <!-- 批量释放：单条 UPDATE，带订单号与状态双重守卫 -->
+    <update id="batchReleaseSeats">
+        UPDATE screening_seat
+        SET status = 0,
+            lock_order_no = NULL,
+            lock_expire_at = NULL,
+            updated_at = NOW()
+        WHERE record_id = #{recordId}
+          AND status = 1
+          AND lock_order_no = #{orderNo}
+          AND seat_code IN
+        <foreach collection="seatCodes" item="code" open="(" separator="," close=")">
+            #{code}
+        </foreach>
+    </update>
+
+    <!-- 根据订单号释放所有锁定座位：从订单 seat 字段解析 record_id 后调用 -->
+    <update id="releaseByOrderNo">
+        UPDATE screening_seat ss
+        JOIN ordered o ON o.record_id = ss.record_id
+        SET ss.status = 0,
+            ss.lock_order_no = NULL,
+            ss.lock_expire_at = NULL,
+            ss.updated_at = NOW()
+        WHERE ss.status = 1
+          AND ss.lock_order_no = #{orderNo}
+    </update>
+
+    <!--
+      根据订单号释放已售出座位：退票时调用，从"已售出"恢复为"可用"。
+      不能按 lock_order_no 匹配 —— 支付成功时该列已被清空（markSoldByOrderNo），
+      历史迁移数据里 status=2 的行同样没有 lock_order_no。
+      因此用订单自己的 record_id + seat 串定位，与订单行一一对应。
+    -->
+    <update id="releaseSoldByOrderNo">
+        UPDATE screening_seat ss
+        JOIN ordered o ON o.orders = #{orderNo}
+                      AND o.record_id = ss.record_id
+        SET ss.status = 0,
+            ss.lock_order_no = NULL,
+            ss.lock_expire_at = NULL,
+            ss.updated_at = NOW()
+        WHERE ss.status = 2
+          AND FIND_IN_SET(ss.seat_code, REPLACE(o.seat, '，', ','))
+    </update>
+
+    <!-- 根据订单号标记为已售出：支付成功后调用 -->
+    <update id="markSoldByOrderNo">
+        UPDATE screening_seat ss
+        JOIN ordered o ON o.record_id = ss.record_id
+        SET ss.status = 2,
+            ss.lock_order_no = NULL,
+            ss.lock_expire_at = NULL,
+            ss.updated_at = NOW()
+        WHERE ss.status = 1
+          AND ss.lock_order_no = #{orderNo}
+    </update>
+
+    <!-- 补偿：清理已过期但未被及时释放的锁定座位（定时任务兜底） -->
+    <update id="cleanupExpiredLocks">
+        UPDATE screening_seat
+        SET status = 0,
+            lock_order_no = NULL,
+            lock_expire_at = NULL,
+            updated_at = NOW()
+        WHERE status = 1
+          AND lock_expire_at IS NOT NULL
+          AND lock_expire_at &lt;= NOW()
+    </update>
+
+</mapper>

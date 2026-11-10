@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.TypeMapper">
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultType="com.example.springboot.entity.Type">
+        SELECT * FROM type
+        <where>
+            <if test="title != null">
+                AND title LIKE CONCAT('%', #{title}, '%')
+            </if>
+        </where>
+        ORDER BY id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Type">
+        SELECT * FROM type WHERE id = #{id}
+    </select>
+
+    <select id="selectByIds" resultType="com.example.springboot.entity.Type">
+        SELECT * FROM type WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+
+    <!-- 一次取回该批类型名已存在的行，TMDB 导入据此只对缺失项建行（BL-12：原为逐名一次查询） -->
+    <select id="selectByTitles" resultType="com.example.springboot.entity.Type">
+        SELECT * FROM type WHERE title IN
+        <foreach collection="titles" item="title" open="(" separator="," close=")">
+            #{title}
+        </foreach>
+    </select>
+
+    <!-- 插入操作。useGeneratedKeys 是 TMDB 导入的必需项：建完类型要拿回自增 id
+         才能填进表单的 typeIds，缺了它 MyBatis 不写实体 id，导入会静默回填空数组。 -->
+    <insert id="insert" parameterType="com.example.springboot.entity.Type" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO type (id, title)
+        VALUES (#{id}, #{title})
+    </insert>
+
+
+    <!-- 更新操作 -->
+    <update id="updateById" parameterType="com.example.springboot.entity.Type">
+        UPDATE type
+        <set>
+            <if test="title != null">title = #{title},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="com.example.springboot.entity.Type">
+        DELETE FROM type WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM type WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

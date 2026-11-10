@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.example.springboot.mapper.CinemaMapper">
+
+    <!-- 查询操作 -->
+    <select id="selectAll" resultType="com.example.springboot.entity.Cinema">
+        SELECT * FROM cinema
+        <where>
+            <if test="name != null">
+                AND name LIKE CONCAT('%', #{name}, '%')
+            </if>
+        </where>
+        ORDER BY id DESC
+    </select>
+
+    <select id="selectById" parameterType="java.lang.Integer" resultType="com.example.springboot.entity.Cinema">
+        SELECT * FROM cinema WHERE id = #{id}
+    </select>
+
+    <!-- 删除守卫的串行化入口：删除前先锁影院行，使「数子表引用 → DELETE」与
+         RoomService.addScoped 的锁影院行互斥。反过来若不在这里加锁，管理员数到
+         「0 个影厅」之后、真正 DELETE 之前，影院角色可以插入一个影厅，
+         随后 DELETE 撞外键 RESTRICT —— 数据不会坏，但管理员拿到的是
+         「仍被其他数据引用」而不是「已有 1 个影厅」。 -->
+    <select id="selectByIdForUpdate" parameterType="java.lang.Integer"
+            resultType="com.example.springboot.entity.Cinema">
+        SELECT * FROM cinema WHERE id = #{id} FOR UPDATE
+    </select>
+
+
+    <!-- 根据用户名查询影院 -->
+    <select id="selectByUsername" parameterType="java.lang.String" resultType="com.example.springboot.entity.Cinema">
+        SELECT * FROM cinema WHERE username = #{username}
+    </select>
+
+    <!-- 「已审核」谓词：只此一处定义，公开列表与区域级联共用同一口径。
+         值即 CinemaStatus.APPROVED，改状态字面量时两处一并改。 -->
+    <sql id="approvedCinema">c.status = '已审核'</sql>
+
+    <!-- 根据电影ID筛选影院：上映关系由排片(record)派生。
+         区域(province/city/district)由关联的影院名录带出，cinema 表不存。 -->
+    <select id="selectByFilmId" resultType="com.example.springboot.entity.Cinema">
+        SELECT DISTINCT c.*, d.province AS province, d.city AS city, d.district AS district
+        FROM cinema c
+        LEFT JOIN cinema_directory d ON c.directory_id = d.id
+        <where>
+            <!-- 未审核影院不对外展示；管理员（含后台审核列表）传 false 看全部 -->
+            <if test="approvedOnly">AND <include refid="approvedCinema"/></if>
+            <!-- 原有影院自身条件。字符串筛选一律连带判空串：前端 clearable 清空即"不筛"，
+                 空串若落成 `= ''` 会查出零行（与其余 mapper 的字符串筛选同口径） -->
+            <if test="cinema.name != null and cinema.name != ''">
+                AND c.name LIKE CONCAT('%', #{cinema.name}, '%')
+            </if>
+            <!-- 前台区域筛选：命中关联名录的市/区 -->
+            <if test="cinema.city != null and cinema.city != ''">AND d.city = #{cinema.city}</if>
+            <if test="cinema.district != null and cinema.district != ''">AND d.district = #{cinema.district}</if>
+            <!-- 管理端按审核状态筛选；前台不传该参数即不筛 -->
+            <if test="cinema.status != null and cinema.status != ''">AND c.status = #{cinema.status}</if>
+            <!-- 电影筛选条件：该影院存在这部电影的排片 -->
+            <if test="filmId != null">
+                AND EXISTS (SELECT 1 FROM record r WHERE r.cinema_id = c.id AND r.film_id = #{filmId})
+            </if>
+        </where>
+        <!-- 有封面的排在前面（前台列表要求），其余仍按 id 倒序 -->
+        ORDER BY (c.avatar IS NULL OR c.avatar = '') ASC, c.id DESC
+    </select>
+
+    <!-- 大盘统计：影院状态分布（由 cinema 实时计数） -->
+    <select id="countGroupByStatus" resultType="com.example.springboot.dto.response.NameValueView">
+        SELECT c.status AS name, COUNT(*) AS value
+        FROM cinema c
+        GROUP BY c.status
+    </select>
+
+    <!-- 删除操作 -->
+    <delete id="deleteById" parameterType="com.example.springboot.entity.Cinema">
+        DELETE FROM cinema WHERE id = #{id}
+    </delete>
+
+    <delete id="deleteBatch">
+        DELETE FROM cinema WHERE id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <!-- 更新操作 -->
+    <update id="updateById" parameterType="com.example.springboot.entity.Cinema">
+        UPDATE cinema
+        <set>
+            <if test="username != null">username = #{username},</if>
+            <if test="password != null">password = #{password},</if>
+            <if test="role != null">role = #{role},</if>
+            <if test="name != null">name = #{name},</if>
+            <if test="avatar != null">avatar = #{avatar},</if>
+            <if test="address != null">address = #{address},</if>
+            <if test="status != null">status = #{status},</if>
+            <if test="phone != null">phone = #{phone},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="directoryId != null">directory_id = #{directoryId},</if>
+            <!-- id 兜底：上方 <if> 均不成立时 <set> 会退化成 "UPDATE t WHERE id=?"（1064），本行保证 SET 恒非空 -->
+            <if test="id != null">id = #{id},</if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <update id="updatePassword" parameterType="com.example.springboot.entity.Cinema">
+        UPDATE cinema SET password = #{password} WHERE id = #{id}
+    </update>
+
+    <!-- 令牌吊销点（epoch 秒）：改密时写入，iat 早于该值的令牌在 JwtUtils 里被拒 -->
+    <update id="updateRevokedBefore">
+        UPDATE cinema SET token_revoked_before = #{epochSecond} WHERE id = #{id}
+    </update>
+
+    <select id="selectRevokedBefore" resultType="java.lang.Long">
+        SELECT token_revoked_before FROM cinema WHERE id = #{id}
+    </select>
+
+    <insert id="insert" parameterType="com.example.springboot.entity.Cinema" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO cinema
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="username != null">username,</if>
+            <if test="password != null">password,</if>
+            <if test="role != null">role,</if>
+            <if test="name != null">name,</if>
+            <if test="avatar != null">avatar,</if>
+            <if test="address != null">address,</if>
+            <if test="status != null">status,</if>
+            <if test="phone != null">phone,</if>
+            <if test="description != null">description,</if>
+            <if test="directoryId != null">directory_id,</if>
+        </trim>
+        VALUES
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="username != null">#{username},</if>
+            <if test="password != null">#{password},</if>
+            <if test="role != null">#{role},</if>
+            <if test="name != null">#{name},</if>
+            <if test="avatar != null">#{avatar},</if>
+            <if test="address != null">#{address},</if>
+            <if test="status != null">#{status},</if>
+            <if test="phone != null">#{phone},</if>
+            <if test="description != null">#{description},</if>
+            <if test="directoryId != null">#{directoryId},</if>
+        </trim>
+    </insert>
+
+    <!-- 前台区域级联选项：只统计已审核且已关联的影院，避免出现选不到影院的城市 -->
+    <select id="selectRegions" resultType="com.example.springboot.dto.response.CinemaRegionItemView">
+        SELECT DISTINCT d.city AS city, d.district AS district
+        FROM cinema c
+        JOIN cinema_directory d ON c.directory_id = d.id
+        WHERE <include refid="approvedCinema"/>
+          AND d.city IS NOT NULL AND d.city != ''
+        ORDER BY d.city, d.district
+    </select>
+
+    <select id="selectLinkedDirectoryIds" resultType="java.lang.Integer">
+        SELECT DISTINCT directory_id FROM cinema
+        WHERE directory_id IN
+        <foreach collection="list" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- 补图目标：有高德名录、封面为空。左连接只是为了取 POI id -->
+    <select id="selectMissingCovers" resultType="com.example.springboot.mapper.CinemaMapper$MissingCoverTarget">
+        SELECT c.id AS cinemaId, d.poi_id AS poiId
+        FROM cinema c
+        INNER JOIN cinema_directory d ON d.id = c.directory_id
+        WHERE c.avatar IS NULL OR c.avatar = ''
+        ORDER BY c.id
+    </select>
+
+    <update id="updateAvatar">
+        UPDATE cinema SET avatar = #{avatar} WHERE id = #{id}
+    </update>
+
+</mapper>
