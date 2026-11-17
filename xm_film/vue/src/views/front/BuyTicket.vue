@@ -182,11 +182,14 @@ import request from "@/utils/request.js";
 import { clearStoredUser, getStoredUser } from '@/utils/authStorage';
 import OrderPayDialog from '@/components/OrderPayDialog.vue';
 
-// 1. Read the current signed-in user from shared auth storage.
+// 当前登录用户信息（来自共享 authStorage），以及是否具备购票资格
 const userInfo = ref(null); // 存储登录用户完整信息
 const isLogin = ref(false); // 是否登录标记
 
-// 初始化并监听登录状态（页面刷新或登录状态变化时自动更新）
+/**
+ * 初始化并监听登录状态：
+ * 只有 USER 角色可以购票；信息缺失或损坏时清空缓存并要求重新登录。
+ */
 const initUserInfo = () => {
   try {
     const storedUser = getStoredUser();
@@ -273,6 +276,10 @@ const continuePay = (order) => {
   paymentDialogVisible.value = true;
 };
 
+/**
+ * 取消本人未支付订单：二次确认后调用取消接口，成功立刻重载座位图。
+ * 重载是必须的 —— 被释放的座位要重新变为可选，否则界面仍显示"我的未支付"。
+ */
 const cancelPendingOrder = (order) => {
   ElMessageBox.confirm('取消后座位将被释放，确认取消该未支付订单吗？', '取消确认', { type: 'warning' })
       .then(() => {
@@ -424,7 +431,10 @@ const initSeats = () => {
   });
 };
 
-// 加载基础信息（电影/影院/场次）
+/**
+ * 加载基础信息：影片、影院、场次并行请求。
+ * 场次返回的影厅行列数是座位图的尺寸来源，因此必须先于 initSeats 完成。
+ */
 const fetchBaseInfo = () => {
   return Promise.all([
     // 电影信息（与影院页接口一致）
@@ -484,6 +494,7 @@ const getSeatClass = (row, col) => {
   }
 };
 
+/** 该座位当前是否可选（矩阵值为 0 才算可用，越界一律不可选） */
 const isSeatAvailable = (row, col) => {
   const r = row - 1;
   const c = col - 1;
@@ -500,6 +511,10 @@ const seatAriaLabel = (row, col) => {
   return `${row}排${col}座，${SEAT_STATE_TEXT[state] || '可选'}`;
 };
 
+/**
+ * 选中座位：未登录先拦截并跳登录；超过单笔上限提示；
+ * 选中后作废 requestId —— 选座内容已变，不能复用上一笔请求的幂等标识。
+ */
 const selectSeat = (row, col) => {
   // 未登录时禁止选座
   if (!isLogin.value) {
@@ -523,6 +538,7 @@ const selectSeat = (row, col) => {
   ElMessage.success(`已选：${seatLabel}`);
 };
 
+/** 取消选中：恢复为可选并同步作废 requestId，保证下次提交是新的业务请求 */
 const removeSeat = (seatLabel) => {
   const match = seatLabel.match(/^(\d+)排(\d+)座$/);
   if (!match) return;
@@ -538,7 +554,7 @@ const removeSeat = (seatLabel) => {
   ElMessage.info(`已取消：${seatLabel}`);
 };
 
-// 辅助工具函数
+/** 时间展示：把后端字符串格式化为 yyyy-MM-dd HH:mm，非法值返回可读提示 */
 const formatShowTime = (timeStr) => {
   if (!timeStr) return '未知时间';
   try {
@@ -549,12 +565,19 @@ const formatShowTime = (timeStr) => {
   }
 };
 
+/** 总价 = 单价 × 已选座位数，固定两位小数（与后端 BigDecimal HALF_UP 展示口径一致） */
 const calculateTotalPrice = () => {
   const price = Number(showInfo.value.price) || 0;
   return (price * selectedSeats.value.length).toFixed(2); // 保留2位小数，符合金额格式
 };
 
-// 确认购票（使用 DTO 端点处理参数校验）
+/**
+ * 确认购票：前端防连点 + requestId 幂等双保险。
+ *
+ * <p>submitting 挡住双击造成的重复 POST；pendingRequestId 保证"网络超时后重试"
+ * 仍被后端识别为同一笔业务（同一 requestId 只建一单）。建单成功立刻清空标识，
+ * 下一次购票必须是全新请求。
+ */
 const confirmBooking = async () => {
   if (submitting.value) return;
   if (selectedSeats.value.length === 0) {

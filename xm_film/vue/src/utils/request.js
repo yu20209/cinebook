@@ -4,11 +4,13 @@ import { getStoredUser, clearStoredUser, LOGIN_NOTICE_KEY } from '@/utils/authSt
 import { API_BASE_URL } from '@/constants'
 import { isPathWithin, loginPath } from '@/utils/navigation'
 
+/** axios 实例：统一 baseURL 与 30s 超时；所有业务模块共用这一份 */
 const request = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
 })
 
+// 防止多个并发 401 同时触发整页跳转（跳转期间其余请求仍会失败）
 let redirectingToLogin = false
 
 /**
@@ -27,6 +29,12 @@ function redirectToLogin() {
   window.location.href = loginPath(pathname + search)
 }
 
+/**
+ * 请求拦截器：
+ * 1. 统一 JSON Content-Type；
+ * 2. 有 token 时注入 Authorization: Bearer，后端 AuthInterceptor 据此鉴权。
+ *    这里只读本地存储，不做有效性判断 —— 失效由响应 401 统一处理。
+ */
 request.interceptors.request.use(
   config => {
     config.headers['Content-Type'] = 'application/json;charset=utf-8'
@@ -41,6 +49,15 @@ request.interceptors.request.use(
   error => Promise.reject(error)
 )
 
+/**
+ * 响应拦截器：
+ * - 成功分支：后端统一返回 Result，个别接口会以字符串返回，这里兼容解析；
+ * - 失败分支：网络错误/超时给专门提示；HTTP 401 清登录态并整页跳登录；
+ *   其余状态码优先展示后端 msg，没有再按状态码兜底。
+ *
+ * 注意：业务失败是 HTTP 200 + body.code，不会进入这里的 error 分支，
+ * 由各调用方用 isSuccess(res) 判断。
+ */
 request.interceptors.response.use(
   response => {
     const res = response.data

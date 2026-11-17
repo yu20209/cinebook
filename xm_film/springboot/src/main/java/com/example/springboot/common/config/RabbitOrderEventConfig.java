@@ -25,12 +25,17 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnProperty(name = "app.order-event.publisher", havingValue = "rabbit")
 public class RabbitOrderEventConfig {
 
+    /** 业务交换机：Topic 类型，durable=true 保证 broker 重启后拓扑仍在 */
     @Bean
     public TopicExchange orderEventExchange(
             @Value("${app.order-event.exchange:cinebook.order.exchange}") String exchange) {
         return new TopicExchange(exchange, true, false);
     }
 
+    /**
+     * 业务队列：持久化 + 绑定死信交换机。
+     * 消费重试耗尽后 basicNack(requeue=false) 的消息会按这里配置的 DLX/路由键进入死信队列。
+     */
     @Bean
     public Queue orderEventQueue(
             @Value("${app.order-event.queue:cinebook.order.queue}") String queue,
@@ -42,6 +47,10 @@ public class RabbitOrderEventConfig {
                 .build();
     }
 
+    /**
+     * 业务绑定：交换机按 routingKey 路由到业务队列。
+     * mandatory 模式下若没有这条绑定，消息会被 broker 退回，Outbox 判定投递失败并重试。
+     */
     @Bean
     public Binding orderEventBinding(
             Queue orderEventQueue,
@@ -50,18 +59,21 @@ public class RabbitOrderEventConfig {
         return BindingBuilder.bind(orderEventQueue).to(orderEventExchange).with(routingKey);
     }
 
+    /** 死信交换机：接收被拒绝/过期的消息，与业务交换机隔离 */
     @Bean
     public DirectExchange orderEventDeadLetterExchange(
             @Value("${app.order-event.dead-letter-exchange:cinebook.order.dlx}") String dlx) {
         return new DirectExchange(dlx, true, false);
     }
 
+    /** 死信队列：保留失败消息现场，供人工排查与补偿，不设置过期时间 */
     @Bean
     public Queue orderEventDeadLetterQueue(
             @Value("${app.order-event.dead-letter-queue:cinebook.order.dlq}") String dlq) {
         return QueueBuilder.durable(dlq).build();
     }
 
+    /** 死信绑定：按固定的 dead routing key 把死信送进死信队列 */
     @Bean
     public Binding orderEventDeadLetterBinding(
             Queue orderEventDeadLetterQueue,

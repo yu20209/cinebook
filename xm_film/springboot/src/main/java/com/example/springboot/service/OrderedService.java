@@ -152,6 +152,10 @@ public class OrderedService extends BaseService<Ordered> {
         return orderedMapper;
     }
 
+    /**
+     * 按角色收敛订单查询范围：普通用户只能看自己的订单，影院账号只能看本影院。
+     * 管理员不加过滤；未知角色同样不加（角色受库级 CHECK 约束，实际不可达）。
+     */
     public void applyScope(Ordered ordered, String role, Integer userId) {
         if (ordered == null || role == null || userId == null) {
             return;
@@ -163,17 +167,28 @@ public class OrderedService extends BaseService<Ordered> {
         }
     }
 
+    /** 基类建单入口：不带角色与 token 用户，等价于内部直接建单（测试与内部调用用） */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void add(Ordered ordered) {
         insertOrder(ordered, null, null);
     }
 
+    /** 对外建单入口：由控制器传入当前角色与 token 用户，限流与归属校验据此生效 */
     @Transactional(rollbackFor = Exception.class)
     public void createOrder(Ordered ordered, String role, Integer tokenUserId) {
         insertOrder(ordered, role, tokenUserId);
     }
 
+    /**
+     * 建单主流程，三道闸门依次为：
+     * <ol>
+     *   <li>限流：Redis 原子计数，挡脚本刷单（Redis 故障放行）；</li>
+     *   <li>幂等预查：同 requestId 直接返回原订单，并校验场次/座位一致；</li>
+     *   <li>座位级条件更新锁座 + 唯一键兜底，并发落败方释放本单座位后返回对手订单。</li>
+     * </ol>
+     * 整个过程在一个事务里：锁座、订单插入、释放/回滚不会留下半成品。
+     */
     private void insertOrder(Ordered ordered, String role, Integer tokenUserId) {
         // ===== 限流闸：单用户每分钟最多 20 次下单尝试，挡住脚本刷单与前端异常重试风暴 =====
         // 放在最前：连数据库都不必碰就能拒掉超额请求。Redis 故障时该检查自动放行。
